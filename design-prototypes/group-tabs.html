@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>便签分组 · 抽屉式标签栏原型</title>
+<style>
+/* ═══ 视觉令牌 — 照搬 theme.json（极简透明风）═══ */
+:root{
+  --strip-bg: rgba(255,255,255,0.28);
+  --text: #5e5e5e;
+  --text-active: #000000;
+  --indicator: #55ffff;
+  --content-bg: rgba(0,0,0,0.17);
+  --body-text: #55ffff;
+  --heading: #ffffff;
+  --font-strip: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  --font-body: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  --font-heading: "Source Han Serif SC", "Noto Serif SC", serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+
+/* ═══ 桌面壁纸占位 ═══ */
+.desktop{position:fixed;inset:0;
+  background:
+    radial-gradient(1100px 700px at 72% 18%, #2b3a67 0%, rgba(43,58,103,0) 60%),
+    linear-gradient(180deg,#0d1830 0%,#1b2950 45%,#38487a 74%,#63578a 100%);
+}
+.desktop .moon{position:absolute;right:17%;top:12%;width:88px;height:88px;border-radius:50%;
+  background:radial-gradient(circle at 35% 35%, #fff8e7, #e8dcb8 60%, #cfc39a);
+  box-shadow:0 0 70px rgba(255,244,214,.40);opacity:.92}
+.desktop .m1{position:absolute;left:-5%;width:65%;bottom:0;height:34%;background:#141d38;
+  clip-path:polygon(0 100%,10% 42%,26% 70%,44% 26%,62% 62%,80% 100%)}
+.desktop .m2{position:absolute;right:-5%;width:60%;bottom:0;height:29%;background:#0e1526;
+  clip-path:polygon(0 100%,16% 58%,34% 78%,54% 22%,72% 56%,90% 38%,100% 100%)}
+
+/* ═══ 便签窗口 ═══ */
+.note-window{position:absolute;width:680px;height:520px;display:flex;flex-direction:column;
+  left:calc(100vw - 740px);top:56px;user-select:none}
+.note-window.dragging{cursor:grabbing}
+
+/* ── 标签行（strip）── */
+.strip{display:flex;align-items:center;flex-wrap:nowrap;overflow:hidden;height:37px;
+  padding:0 8px;gap:4px;background:var(--strip-bg);border-radius:8px 8px 0 0;
+  font-family:var(--font-strip);font-size:13.5px;color:var(--text);cursor:default}
+
+.chip{display:inline-flex;align-items:center;padding:6px 9px;border-radius:4px;cursor:pointer;
+  color:var(--text);line-height:1;white-space:nowrap;flex:0 0 auto;
+  border-bottom:2px solid transparent;transition:color .12s}
+.chip:hover{color:var(--text-active)}
+.chip.note.active{color:var(--text-active);border-bottom-color:var(--indicator)}
+
+.plus{padding:4px 11px;color:rgba(0,0,0,.30);cursor:pointer;font-size:14px;flex:0 0 auto;
+  transition:color .12s}
+.plus:hover{color:var(--text-active)}
+
+/* ── 文件夹抽屉（无图标：容器隐喻）──
+   闭合 = 一颗淡底胶囊；拉出 = 胶囊长大包住子项；嵌套 = 胶囊套胶囊。
+   左侧圆角小、右侧圆角大——抽屉从左侧柜体向右拉出的方向感。
+   底色不透明度递增：闭合 5% → 悬浮 8% → 展开 9.5%，嵌套自然叠加变深。 */
+.drawer{display:inline-flex;align-items:center;flex:0 0 auto;
+  padding:2px 5px;border-radius:3px 10px 10px 3px;background:rgba(0,0,0,.05);
+  transition:background .15s}
+.drawer:hover{background:rgba(0,0,0,.08)}
+.drawer.open{background:rgba(0,0,0,.095)}
+.drawer.open:hover{background:rgba(0,0,0,.11)}
+.drawer .chip.folder-name{padding:4px 7px}
+.drawer.open > .chip.folder-name{color:var(--text-active)}
+
+/* 名称与子项之间的细分隔线（提示名称是收起手柄） */
+.drawer .sep{width:1px;height:14px;margin:0 4px;flex:0 0 auto;
+  background:rgba(0,0,0,.16)}
+
+.drawer > .children{display:inline-grid;grid-template-columns:0fr;opacity:0;overflow:hidden;
+  transition:grid-template-columns .18s ease-out, opacity .16s ease-out}
+.drawer.open > .children{grid-template-columns:1fr;opacity:1}
+.drawer > .children > .inner{min-width:0;overflow:hidden;display:inline-flex;
+  align-items:center;gap:2px;white-space:nowrap;
+  transform:translateX(-6px);transition:transform .18s ease-out}
+.drawer.open > .children > .inner{transform:none}
+
+/* ── 内容区 ── */
+.content{flex:1;background:var(--content-bg);border-radius:0 0 21px 21px;
+  padding:16px 18px 20px;overflow-y:auto;user-select:text;
+  color:var(--body-text);font-family:var(--font-body);font-size:15.5px;line-height:1.65}
+.content h2{font-family:var(--font-heading);color:var(--heading);font-size:22px;
+  font-weight:600;margin:2px 0 10px}
+.content p{margin:6px 0}
+.content ul{padding-left:20px;margin:6px 0}
+.content li{margin:4px 0}
+.content blockquote{border-left:3px solid rgba(85,255,255,.35);padding:2px 12px;
+  margin:10px 0;color:#8fe8ff}
+.content::-webkit-scrollbar{width:6px}
+.content::-webkit-scrollbar-thumb{background:rgba(0,0,0,.20);border-radius:3px}
+.content::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,.40)}
+
+/* ── 右键菜单（纯文字）── */
+.menu{position:fixed;z-index:99;background:rgba(250,250,250,.97);border-radius:8px;
+  padding:5px 0;min-width:158px;box-shadow:0 8px 30px rgba(0,0,0,.28);
+  font:13px var(--font-strip);color:#333}
+.menu.hidden{display:none}
+.menu .item{position:relative;padding:7px 16px;display:flex;align-items:center;
+  justify-content:space-between;gap:18px;cursor:pointer;white-space:nowrap}
+.menu .item:hover{background:rgba(85,191,255,.16)}
+.menu .item .arrow{color:#999;font-size:12px}
+.menu .sub{position:absolute;left:100%;top:-5px;display:none;background:rgba(250,250,250,.97);
+  border-radius:8px;padding:5px 0;min-width:140px;box-shadow:0 8px 30px rgba(0,0,0,.28)}
+.menu .item:hover > .sub{display:block}
+
+/* ── 操作提示（页面级，不属于产品 UI）── */
+.hint{position:fixed;left:16px;bottom:14px;font:12px var(--font-strip);
+  color:rgba(255,255,255,.55);letter-spacing:.3px;pointer-events:none}
+</style>
+</head>
+<body>
+<div class="desktop">
+  <div class="moon"></div>
+  <div class="m1"></div><div class="m2"></div>
+</div>
+
+<div class="note-window" id="win">
+  <div class="strip" id="strip"></div>
+  <div class="content" id="content"></div>
+</div>
+
+<div class="menu hidden" id="ctx"></div>
+
+<div class="hint">悬浮 / 点击文件夹拉出抽屉 &nbsp;·&nbsp; 点文件夹名收起（=返回） &nbsp;·&nbsp; 右键标签 / 文件夹操作 &nbsp;·&nbsp; 按住标签行拖动窗口</div>
+
+<script>
+/* ═════════════════════════════════════════════════
+   模拟数据 — notes/ 目录树
+   ═════════════════════════════════════════════════ */
+const note = (name, body) => ({ name, body });
+
+const ROOT = {
+  notes: [
+    note('每日待办', `
+      <h2>📋 今日待办</h2>
+      <p>2026 · 09 · 16 · 周三</p>
+      <ul>
+        <li>✅ 完成分组方案 HTML 原型</li>
+        <li>💬 确认抽屉式标签栏交互</li>
+        <li>💻 notes_manager 改为递归扫描</li>
+        <li>🛒 买菜：番茄 / 牛腩 / 咖喱块</li>
+      </ul>
+      <blockquote>退到桌面就能看见的事，才叫待办。</blockquote>`),
+    note('金句', `
+      <h2>金句</h2>
+      <blockquote>死并非生的对立面，而作为生的一部分永存。</blockquote>
+      <p>—— 村上春树《挪威的森林》</p>
+      <blockquote>我们把世界拿错看了一遍，它却神秘地显得正确。</blockquote>
+      <p>—— 辛波斯卡</p>`),
+  ],
+  folders: [
+    { name: '工作', notes: [
+        note('周报', `
+          <h2>第 38 周周报</h2>
+          <ul>
+            <li>分组功能：后端文件夹方案定稿</li>
+            <li>抽屉组件：原型阶段，待视觉签收</li>
+            <li>watchdog 递归监听：未开始</li>
+          </ul>
+          <blockquote>风险：QTabWidget 退役后的回归验证。</blockquote>`),
+      ],
+      folders: [
+        { name: '2026', notes: [
+            note('Q1计划', `
+              <h2>2026 · Q1</h2>
+              <ul><li>便签分组上线</li><li>主题市场调研</li><li>打包 exe 发布 v0.2</li></ul>`),
+            note('Q2计划', `
+              <h2>2026 · Q2</h2>
+              <ul><li>多显示器适配</li><li>导出为图片</li></ul>`),
+          ],
+          folders: [] },
+      ] },
+    { name: '生活', notes: [
+        note('买菜清单', `
+          <h2>🛒 买菜清单</h2>
+          <ul><li>番茄 3 个</li><li>牛腩 500g</li><li>咖喱块 1 盒</li><li>鸡蛋 一打</li></ul>`),
+      ],
+      folders: [] },
+  ],
+};
+
+/* ═════════════════════════════════════════════════
+   状态
+   ═════════════════════════════════════════════════ */
+let openSet = new Set();      // 展开的抽屉：'工作'、'工作/2026'
+let activeKey = '每日待办';    // 激活便签的路径
+let drawerEls = {};           // key → .drawer 元素
+
+const stripEl = document.getElementById('strip');
+const contentEl = document.getElementById('content');
+const winEl = document.getElementById('win');
+const ctxEl = document.getElementById('ctx');
+
+/* ═════════════════════════════════════════════════
+   树操作
+   ═════════════════════════════════════════════════ */
+function getNode(pathArr) {
+  let n = ROOT;
+  for (const name of pathArr) {
+    n = n.folders.find(f => f.name === name);
+    if (!n) return null;
+  }
+  return n;
+}
+function findNote(pathArr) {
+  const parent = getNode(pathArr.slice(0, -1));
+  return parent && parent.notes.find(n => n.name === pathArr[pathArr.length - 1]);
+}
+function allFolderPaths() {
+  const out = [];
+  (function walk(node, path) {
+    node.folders.forEach(f => { out.push([...path, f.name]); walk(f, [...path, f.name]); });
+  })(ROOT, []);
+  return out;
+}
+function countNotes(node) {
+  return node.notes.length + node.folders.reduce((s, f) => s + countNotes(f), 0);
+}
+function firstNotePath(node = ROOT, path = []) {
+  if (node.notes.length) return [...path, node.notes[0].name];
+  for (const f of node.folders) {
+    const r = firstNotePath(f, [...path, f.name]);
+    if (r) return r;
+  }
+  return null;
+}
+
+/* ═════════════════════════════════════════════════
+   渲染
+   ═════════════════════════════════════════════════ */
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function render() {
+  stripEl.innerHTML = '';
+  drawerEls = {};
+  renderLevel(ROOT, [], stripEl);
+
+  const plus = el('span', 'plus', '+');
+  plus.title = '新建便签（右键新建文件夹）';
+  plus.addEventListener('click', () => createNoteAt([]));
+  stripEl.appendChild(plus);
+
+  validateState();
+  applyState();
+}
+
+function renderLevel(node, path, container) {
+  node.notes.forEach(n => container.appendChild(noteChip(n, path)));
+  node.folders.forEach(f => container.appendChild(drawerEl(f, path)));
+}
+
+function noteChip(n, path) {
+  const key = [...path, n.name].join('/');
+  const c = el('span', 'chip note', n.name);
+  c.dataset.key = key;
+  c.addEventListener('click', e => {
+    e.stopPropagation();
+    if (justDragged()) return;
+    setActive(key);
+  });
+  c.addEventListener('contextmenu', e => {
+    e.preventDefault(); e.stopPropagation();
+    noteMenu(key, e);
+  });
+  return c;
+}
+
+function drawerEl(f, path) {
+  const key = [...path, f.name].join('/');
+  const d = el('div', 'drawer');
+  d.dataset.key = key;
+
+  const name = el('span', 'chip folder-name', f.name);
+  name.addEventListener('click', e => {
+    e.stopPropagation();
+    if (justDragged()) return;
+    toggleDrawer(key);
+  });
+  name.addEventListener('contextmenu', e => {
+    e.preventDefault(); e.stopPropagation();
+    folderMenu(key, e);
+  });
+
+  const children = el('span', 'children');
+  const inner = el('span', 'inner');
+  inner.appendChild(el('span', 'sep'));
+  renderLevel(f, [...path, f.name], inner);
+  children.appendChild(inner);
+
+  d.appendChild(name);
+  d.appendChild(children);
+
+  /* 悬浮 300ms 拉出（按下拖窗口期间抑制） */
+  let hoverTimer = null;
+  d.addEventListener('mouseenter', () => {
+    if (openSet.has(key) || dragState) return;
+    hoverTimer = setTimeout(() => { if (!dragState) openDrawer(key); }, 300);
+  });
+  d.addEventListener('mouseleave', () => clearTimeout(hoverTimer));
+
+  drawerEls[key] = d;
+  return d;
+}
+
+function applyState() {
+  for (const [key, el] of Object.entries(drawerEls))
+    el.classList.toggle('open', openSet.has(key));
+  document.querySelectorAll('.chip.note').forEach(c =>
+    c.classList.toggle('active', c.dataset.key === activeKey));
+}
+
+/* ═════════════════════════════════════════════════
+   抽屉开合（手风琴：同级只开一个）
+   ═════════════════════════════════════════════════ */
+function prune(key) {
+  for (const k of [...openSet])
+    if (k === key || k.startsWith(key + '/')) openSet.delete(k);
+}
+function openDrawer(key) {
+  const parts = key.split('/');
+  const parentParts = parts.slice(0, -1);
+  const parent = getNode(parentParts);
+  if (!parent) return;
+  parent.folders.forEach(f => {                       // 收起同级兄弟
+    const k = [...parentParts, f.name].join('/');
+    if (k !== key) prune(k);
+  });
+  for (let i = 1; i <= parts.length; i++)             // 确保祖先链展开
+    openSet.add(parts.slice(0, i).join('/'));
+  applyState();
+}
+function closeDrawer(key) { prune(key); applyState(); }
+function toggleDrawer(key) {
+  openSet.has(key) ? closeDrawer(key) : openDrawer(key);
+}
+
+/* ═════════════════════════════════════════════════
+   便签激活 + 内容渲染
+   ═════════════════════════════════════════════════ */
+function setActive(key) {
+  activeKey = key;
+  const parts = key.split('/');
+  for (let i = 1; i < parts.length; i++)              // 祖先抽屉保持展开
+    openSet.add(parts.slice(0, i).join('/'));
+  applyState();
+  renderContent();
+}
+function renderContent() {
+  const n = findNote(activeKey.split('/'));
+  contentEl.innerHTML = n ? n.body : '<p>（无便签）</p>';
+  contentEl.scrollTop = 0;
+}
+function validateState() {
+  if (!findNote(activeKey.split('/'))) {
+    const fb = firstNotePath();
+    activeKey = fb ? fb.join('/') : '';
+  }
+  renderContent();
+}
+
+/* 结构变化（增删改移）后整体重建 */
+function afterStruct() { render(); }
+
+/* ═════════════════════════════════════════════════
+   CRUD（原型级：prompt / confirm）
+   ═════════════════════════════════════════════════ */
+function createNoteAt(pathArr) {
+  const name = prompt('新建便签：', '新便签');
+  if (!name) return;
+  getNode(pathArr).notes.push(note(name, '<p>（空便签）</p>'));
+  afterStruct();
+  setActive([...pathArr, name].join('/'));
+}
+function createFolderAt(pathArr) {
+  const name = prompt('新建文件夹：', '新分组');
+  if (!name) return;
+  getNode(pathArr).folders.push({ name, notes: [], folders: [] });
+  afterStruct();
+  openDrawer([...pathArr, name].join('/'));
+}
+function renameNote(key) {
+  const path = key.split('/'), name = path.pop();
+  const n = findNote([...path, name]);
+  const nn = prompt('重命名便签：', name);
+  if (!nn || nn === name) return;
+  n.name = nn;
+  if (activeKey === key) activeKey = [...path, nn].join('/');
+  afterStruct();
+}
+function deleteNote(key) {
+  const path = key.split('/'), name = path.pop();
+  const parent = getNode(path);
+  parent.notes = parent.notes.filter(n => n.name !== name);
+  afterStruct();
+}
+function moveNote(key, targetArr) {
+  const path = key.split('/'), name = path.pop();
+  const src = getNode(path);
+  const n = src.notes.find(x => x.name === name);
+  if (!n) return;
+  src.notes = src.notes.filter(x => x.name !== name);
+  getNode(targetArr).notes.push(n);
+  afterStruct();
+  setActive([...targetArr, name].join('/'));          // 打开目标抽屉，看到它落地
+}
+function renameFolder(key) {
+  const path = key.split('/'), name = path.pop();
+  const f = getNode(path).folders.find(x => x.name === name);
+  const nn = prompt('重命名文件夹：', name);
+  if (!nn || nn === name) return;
+  f.name = nn;
+  const oldP = key, newP = [...path, nn].join('/');
+  openSet = new Set([...openSet].map(k =>
+    k === oldP ? newP : k.startsWith(oldP + '/') ? newP + k.slice(oldP.length) : k));
+  if (activeKey.startsWith(oldP + '/') || activeKey === oldP)
+    activeKey = newP + activeKey.slice(oldP.length);
+  afterStruct();
+}
+function deleteFolder(key) {
+  const path = key.split('/'), name = path.pop();
+  const parent = getNode(path);
+  const f = parent.folders.find(x => x.name === name);
+  const cnt = countNotes(f);
+  if (!confirm(`删除文件夹「${name}」及其中 ${cnt} 条便签？`)) return;
+  parent.folders = parent.folders.filter(x => x.name !== name);
+  prune(key);
+  afterStruct();
+}
+
+/* ═════════════════════════════════════════════════
+   右键菜单
+   ═════════════════════════════════════════════════ */
+function buildItems(container, items) {
+  items.forEach(it => {
+    const d = el('div', 'item');
+    d.appendChild(el('span', null, it.label));
+    if (it.sub) {
+      d.appendChild(el('span', 'arrow', '›'));
+      const s = el('div', 'sub');
+      buildItems(s, it.sub);
+      d.appendChild(s);
+    } else {
+      d.addEventListener('click', ev => {
+        ev.stopPropagation();
+        hideMenu();
+        it.action && it.action();
+      });
+    }
+    container.appendChild(d);
+  });
+}
+function showMenu(x, y, items) {
+  ctxEl.innerHTML = '';
+  buildItems(ctxEl, items);
+  ctxEl.classList.remove('hidden');
+  const w = ctxEl.offsetWidth, h = ctxEl.offsetHeight;
+  ctxEl.style.left = Math.min(x, innerWidth - w - 8) + 'px';
+  ctxEl.style.top = Math.min(y, innerHeight - h - 8) + 'px';
+}
+function hideMenu() { ctxEl.classList.add('hidden'); }
+
+function noteMenu(key, e) {
+  const parentPath = key.split('/').slice(0, -1);
+  const moveTargets = [
+    { label: '根目录', action: () => moveNote(key, []) },
+    ...allFolderPaths()
+      .filter(p => p.join('/') !== parentPath.join('/'))
+      .map(p => ({ label: p.join('/'), action: () => moveNote(key, p) })),
+  ];
+  showMenu(e.clientX, e.clientY, [
+    { label: '重命名', action: () => renameNote(key) },
+    { label: '删除', action: () => deleteNote(key) },
+    { label: '移动到…', sub: moveTargets },
+  ]);
+}
+function folderMenu(key, e) {
+  const pathArr = key.split('/');
+  showMenu(e.clientX, e.clientY, [
+    { label: '新建便签', action: () => createNoteAt(pathArr) },
+    { label: '新建子文件夹', action: () => createFolderAt(pathArr) },
+    { label: '重命名', action: () => renameFolder(key) },
+    { label: '删除', action: () => deleteFolder(key) },
+  ]);
+}
+stripEl.addEventListener('contextmenu', e => {
+  if (e.target !== stripEl && !e.target.classList.contains('plus')) return;
+  e.preventDefault();
+  showMenu(e.clientX, e.clientY, [
+    { label: '新建便签', action: () => createNoteAt([]) },
+    { label: '新建文件夹', action: () => createFolderAt([]) },
+  ]);
+});
+
+document.addEventListener('mousedown', e => {
+  if (!ctxEl.contains(e.target)) hideMenu();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideMenu(); });
+ctxEl.addEventListener('contextmenu', e => e.preventDefault());
+
+/* ═════════════════════════════════════════════════
+   按住标签行拖动窗口（与点击/悬浮共存）
+   ═════════════════════════════════════════════════ */
+let dragState = null;       // {sx, sy, wl, wt, moved}
+let dragEndedAt = 0;
+function justDragged() { return Date.now() - dragEndedAt < 120; }
+
+stripEl.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  dragState = { sx: e.clientX, sy: e.clientY, wl: winEl.offsetLeft, wt: winEl.offsetTop, moved: false };
+});
+window.addEventListener('mousemove', e => {
+  if (!dragState) return;
+  const dx = e.clientX - dragState.sx, dy = e.clientY - dragState.sy;
+  if (!dragState.moved && Math.hypot(dx, dy) < 5) return;
+  dragState.moved = true;
+  winEl.classList.add('dragging');
+  const x = Math.max(0, Math.min(innerWidth - 80, dragState.wl + dx));
+  const y = Math.max(0, Math.min(innerHeight - 40, dragState.wt + dy));
+  winEl.style.left = x + 'px';
+  winEl.style.top = y + 'px';
+});
+window.addEventListener('mouseup', () => {
+  if (dragState && dragState.moved) dragEndedAt = Date.now();
+  dragState = null;
+  winEl.classList.remove('dragging');
+});
+
+/* ═════════════════════════════════════════════════
+   启动
+   ═════════════════════════════════════════════════ */
+render();
+setActive('每日待办');
+</script>
+</body>
+</html>

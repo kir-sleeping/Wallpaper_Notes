@@ -287,6 +287,7 @@ class SettingsDialog(QDialog):
         ))
         self._form.addWidget(self._build_window_group())
         self._form.addWidget(self._build_tab_bar_group())
+        self._form.addWidget(self._build_tab_strip_group())
         self._form.addWidget(self._build_content_group())
         self._form.addWidget(self._build_font_mgmt_group())
         self._form.addWidget(self._build_editor_group())
@@ -492,6 +493,49 @@ class SettingsDialog(QDialog):
         )
         self._tab_radius_top = self._add_spin_row(
             gl, "上圆角：", tb.get("radius_top", 0), 0, 30, suffix="px"
+        )
+        return g
+
+    def _build_tab_strip_group(self) -> QGroupBox:
+        """分组抽屉（文件夹胶囊）配色。"""
+        ts = self._theme.get("tab_strip", {})
+        tb = self._theme.get("tab_bar", {})   # 文件夹色的默认值取自标签栏
+        g = QGroupBox("分组抽屉")
+        gl = QVBoxLayout(g)
+        self._folder_bg = self._add_color_row(
+            gl, "收起底色：", ts.get("folder_bg", "rgba(0,0,0,0.05)"),
+        )
+        self._folder_bg_open = self._add_color_row(
+            gl, "展开底色：", ts.get("folder_bg_open", "rgba(0,0,0,0.095)"),
+        )
+        self._folder_sep = self._add_color_row(
+            gl, "分隔线：", ts.get("separator_color", "rgba(0,0,0,0.16)"),
+        )
+        self._folder_text = self._add_color_row(
+            gl,
+            "文件夹文字色：",
+            ts.get("folder_text_color", tb.get("text_color", "#666666")),
+            with_alpha=False,
+        )
+        self._folder_active = self._add_color_row(
+            gl,
+            "文件夹选中色：",
+            ts.get("folder_active_text_color", tb.get("active_text_color", "#333333")),
+            with_alpha=False,
+        )
+        self._folder_bar = self._add_color_row(
+            gl,
+            "文件夹条颜色：",
+            ts.get(
+                "folder_bar_color",
+                tb.get("active_indicator_color", "#4A90D9"),
+            ),
+        )
+        self._plus_color = self._add_color_row(
+            gl, "新建(+)色：", ts.get("plus_color", "rgba(0,0,0,0.30)"),
+        )
+        self._fade_width = self._add_spin_row(
+            gl, "右缘渐隐：", ts.get("fade_width", 28), 0, 80, suffix="px"
         )
         return g
 
@@ -784,6 +828,23 @@ class SettingsDialog(QDialog):
         theme["tab_bar"]["font_family"] = self._tab_font.currentText()
         theme["tab_bar"]["font_size"] = self._tab_size.value()
         theme["tab_bar"]["radius_top"] = self._tab_radius_top.value()
+
+        theme.setdefault("tab_strip", {})
+        theme["tab_strip"]["folder_bg"] = self._folder_bg.get_css_color()
+        theme["tab_strip"]["folder_bg_open"] = (
+            self._folder_bg_open.get_css_color()
+        )
+        # 悬停色已并入收起/展开两种底色，清掉历史配置里的旧键
+        theme["tab_strip"].pop("folder_bg_hover", None)
+        theme["tab_strip"].pop("folder_bg_open_hover", None)
+        theme["tab_strip"]["separator_color"] = self._folder_sep.get_css_color()
+        theme["tab_strip"]["folder_text_color"] = self._folder_text.get_css_color()
+        theme["tab_strip"]["folder_active_text_color"] = (
+            self._folder_active.get_css_color()
+        )
+        theme["tab_strip"]["folder_bar_color"] = self._folder_bar.get_css_color()
+        theme["tab_strip"]["plus_color"] = self._plus_color.get_css_color()
+        theme["tab_strip"]["fade_width"] = self._fade_width.value()
 
         theme.setdefault("content", {})
         theme["content"]["background_color"] = (

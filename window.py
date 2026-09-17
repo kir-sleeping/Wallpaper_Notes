@@ -1,20 +1,23 @@
 """主窗口 — 便签的视觉载体。
 
 职责：
-1. 管理 QTabWidget + QStackedWidget（显示/编辑双层）
+1. 管理标签行（NoteStrip：便签 chip + 文件夹抽屉）+ QStackedWidget 内容区
 2. 无边框窗口的拖拽移动与边缘缩放
 3. 桌面层 ↔ 置顶层切换
 4. 将 UI 事件翻译为回调，不直接操作文件系统
 
 架构：
   WallpaperWindow(QWidget)
-  └── QTabWidget（标签栏）
-      └── 每个标签页 = QStackedWidget
+  ├── NoteStrip（标签行：chip + 抽屉，分组导航）
+  └── QStackedWidget（内容区，每便签一页）
+      └── 每页 = QStackedWidget
           ├── [0] QTextBrowser   —— 显示模式
           └── [1] QWidget(容器)+QPlainTextEdit —— 编辑模式
 
 边界：
 - 不直接操作文件（通过 callbacks）
+- 分组结构数据来自 callback get_tree()（NotesManager.scan_tree），
+  窗口自己不扫描文件系统
 - 不管理快捷键（WM_HOTKEY 由 window.nativeEvent 处理）
 """
 
@@ -46,17 +49,17 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPlainTextEdit,
-    QPushButton,
     QStackedWidget,
-    QTabWidget,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
 from config import Config
+from models import FolderNode
 from renderer import build_css, render
 from ui_components import (
+    NoteStrip,
     build_global_qss,
     generate_content_qss,
     generate_editor_qss,
@@ -313,13 +316,6 @@ class WallpaperWindow(QWidget):
         self._drag_offset: QPoint | None = None
         self._resize_edges: set[str] = set()  # {'top', 'left', ...}
 
-        # 标签栏拖拽跟踪（仅在标签栏和 ⊕ 按钮区域生效）
-        self._tab_drag_press_pos: QPoint | None = None
-        self._tab_drag_engaged: bool = False
-
-        # ⊕ 按钮引用（eventFilter 需要）
-        self._btn_add: QPushButton | None = None
-
         # 磨砂噪点覆盖层（按 QStackedWidget id 索引）
         self._noise_widgets: dict[int, FrostedNoiseWidget] = {}
 
@@ -337,8 +333,15 @@ class WallpaperWindow(QWidget):
         self._edit_dblclick_timer.setSingleShot(True)
         self._edit_dblclick_timer.timeout.connect(self._reset_edit_dblclick_count)
 
-        # 标签 → 文件路径映射（QTabWidget 在 PySide6 中不暴露 tabData）
-        self._fp_by_widget: dict[int, str] = {}  # id(QStackedWidget) → filepath
+        # 便签页注册表：filepath ↔ 内容页（viewer/editor 双层）
+        self._pages: dict[str, QStackedWidget] = {}
+        self._fp_by_page: dict[int, str] = {}  # id(page) → filepath
+        self._active_fp: str | None = None
+        # 分组树缓存（get_tree 回调的最近结果，供菜单与分组查询）
+        self._tree_cache: FolderNode | None = None
+        self._strip_drag_origin: QPoint | None = None
+        # 分组抽屉展开状态（window 是状态源并负责持久化）
+        self._open_drawers: list[str] = []
 
         # 窗口属性
         self.setWindowTitle("Wallpaper_Notes")
@@ -372,30 +375,71 @@ class WallpaperWindow(QWidget):
     # ── 公开接口 ────────────────────────────────────────────────
 
     def add_tab(self, filepath: str) -> None:
-        """新增标签页。"""
+        """新增便签页（已存在则直接激活）。"""
         fp = str(filepath)
-        # 重复检查（通过 widget 映射查找）
-        existing = self._find_tab_index(fp)
-        if existing >= 0:
-            self._tabs.setCurrentIndex(existing)
+        if fp in self._pages:
+            self.activate_note(fp)
             return
 
         content = self._read_file(fp)
-        stack = self._create_tab_content(fp, content)
-        stem = Path(fp).stem
-        self._tabs.addTab(stack, stem)
-        self._fp_by_widget[id(stack)] = fp
-        self._tabs.setCurrentIndex(self._tabs.count() - 1)
+        page = self._create_tab_content(fp, content)
+        self._pages[fp] = page
+        self._fp_by_page[id(page)] = fp
+        self._content_stack.addWidget(page)
+        self.rebuild_strip()
+        self.activate_note(fp)
 
     def remove_tab(self, filepath: str) -> None:
-        """移除标签页。"""
+        """移除便签页；若为当前页则回落到第一个可用便签。"""
         fp = str(filepath)
-        for i in range(self._tabs.count()):
-            stack = self._tabs.widget(i)
-            if stack and self._fp_by_widget.get(id(stack)) == fp:
-                del self._fp_by_widget[id(stack)]
-                self._tabs.removeTab(i)
-                return
+        page = self._pages.pop(fp, None)
+        if page is None:
+            return
+        self._fp_by_page.pop(id(page), None)
+        if self._active_fp == fp:
+            self._active_fp = None
+        self._content_stack.removeWidget(page)
+        page.deleteLater()
+        if self._active_fp is None and self._pages:
+            self.activate_note(next(iter(self._pages)))
+        self.rebuild_strip()
+
+    def activate_note(self, filepath: str) -> None:
+        """激活便签：保存上一页编辑 → 切内容页 → 展开祖先抽屉。"""
+        fp = str(filepath)
+        page = self._pages.get(fp)
+        if page is None:
+            return
+        self._save_previous_if_editing()
+        self._active_fp = fp
+        self._content_stack.setCurrentWidget(page)
+        # 确保磨砂噪点层在最上层（内容页切换会覆盖子widget）
+        self._ensure_noise_ontop()
+        group = self._group_of(fp)
+        if group:
+            self._strip.reveal_note(fp, group)
+        self._strip.set_active(fp)
+
+    def _save_previous_if_editing(self) -> None:
+        """切换前保存上一页的编辑内容（如在编辑模式）。"""
+        prev_fp = self._active_fp
+        if not prev_fp:
+            return
+        page = self._pages.get(prev_fp)
+        if page is None or page.currentIndex() != 1:
+            return
+        editor = page.widget(1).findChild(QPlainTextEdit) if page.widget(1) else None
+        scroll_pct = self._get_scroll_pct(editor) if editor else 0.0
+        content = editor.toPlainText() if editor else ""
+        # 标记为己保存——避免 watchdog 回刷导致滚动抖动
+        self._mark_just_saved(prev_fp)
+        save_cb = self._callbacks.get("on_save_content")
+        if save_cb:
+            save_cb(prev_fp, content)
+        viewer: QTextBrowser = page.widget(0)
+        viewer.setHtml(render(content, self._theme, base_dir=Path(prev_fp).parent))
+        page.setCurrentIndex(0)
+        self._set_scroll_pct(viewer, scroll_pct)
 
     def refresh_current_tab(self, filepath: str) -> None:
         """文件内容被外部修改时刷新显示。
@@ -408,14 +452,13 @@ class WallpaperWindow(QWidget):
         # 己保存的文件跳过——viewer 已经是最新，重绘只会抖一下滚动位置
         if getattr(self, '_just_saved', None) and fp in self._just_saved:
             return
-        idx = self._find_tab_index(fp)
-        if idx < 0:
+        page = self._pages.get(fp)
+        if page is None:
             return
-        stack: QStackedWidget = self._tabs.widget(idx)
-        viewer: QTextBrowser = stack.widget(0)
+        viewer: QTextBrowser = page.widget(0)
         scroll_pct = self._get_scroll_pct(viewer)
         content = self._read_file(fp)
-        viewer.setHtml(render(content, self._theme))
+        viewer.setHtml(render(content, self._theme, base_dir=Path(fp).parent))
         self._set_scroll_pct(viewer, scroll_pct)
 
     def bring_to_front_and_edit(self) -> None:
@@ -544,8 +587,8 @@ class WallpaperWindow(QWidget):
             "}"
         )
         enable_glow = ct.get("enable_glow", False)
-        for i in range(self._tabs.count()):
-            stack: QStackedWidget = self._tabs.widget(i)
+        self._strip.apply_theme(theme)
+        for stack in self._pages.values():
             # 更新内容区边框 + 玻璃
             stack.setStyleSheet(border_qss)
             viewer: QTextBrowser = stack.widget(0)
@@ -579,10 +622,10 @@ class WallpaperWindow(QWidget):
                 viewer.viewport().setGraphicsEffect(TextGlowEffect(blur_radius=3))
             # 编辑器不应用 QGraphicsEffect——辉光会干扰 IME 拼音候选框定位
             # 重新渲染 Markdown（文字 CSS 可能变了）
-            filepath = self._fp_by_widget.get(id(stack), "")
+            filepath = self._fp_by_page.get(id(stack), "")
             if filepath:
                 content = self._read_file(filepath)
-                viewer.setHtml(render(content, theme))
+                viewer.setHtml(render(content, theme, base_dir=Path(filepath).parent))
             # 磨砂质感覆盖层（独立更新）
             noise_id = id(stack)
             enable_frost = ct.get("enable_frost", False)
@@ -615,51 +658,25 @@ class WallpaperWindow(QWidget):
         layout.setSpacing(0)
         self._main_layout = layout
 
-        # ── 标签栏 ──
-        self._tabs = QTabWidget()
-        self._tabs.setDocumentMode(True)
-        self._tabs.setMovable(False)
-        self._tabs.setTabsClosable(False)
+        # ── 标签行（便签 chip + 文件夹抽屉）──
+        self._strip = NoteStrip(self._theme)
+        self._strip.note_activated.connect(self.activate_note)
+        self._strip.drawers_changed.connect(self._on_drawers_changed)
+        self._strip.note_context.connect(self._on_note_context)
+        self._strip.folder_context.connect(self._on_folder_context)
+        self._strip.plus_clicked.connect(self._on_add_clicked)
+        self._strip.plus_context.connect(self._show_root_create_menu)
+        self._strip.strip_context.connect(self._show_root_create_menu)
+        self._strip.drag_started.connect(self._on_strip_drag_started)
+        self._strip.drag_moved.connect(self._on_strip_drag_moved)
+        self._strip.drag_finished.connect(self._on_strip_drag_finished)
+        layout.addWidget(self._strip)
 
-        # ⊕ 按钮
-        btn_add = QPushButton("+")
-        btn_add.setFixedSize(22, 22)
-        btn_add.setFlat(True)
-        btn_add.setToolTip("新建便签")
-        btn_add.clicked.connect(self._on_add_clicked)
-        self._btn_add = btn_add
-
-        # 把 ⊕ 直接放进 QTabBar（同一容器），用 move() 定位到最右侧
-        btn_add.setParent(self._tabs.tabBar())
-        self._tabs.tabBar().setStyleSheet("QTabBar { padding-right: 30px; }")
-        QTimer.singleShot(0, self._reposition_plus_button)
-
-        # 右键菜单
-        tab_bar = self._tabs.tabBar()
-        tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        tab_bar.customContextMenuRequested.connect(self._on_tab_context_menu)
-
-        # 标签切换 → 回到显示模式
-        self._tabs.currentChanged.connect(self._on_tab_changed)
-
-        # 标签栏 + ⊕ 按钮支持拖拽窗口
-        self._tabs.tabBar().installEventFilter(self)
-        self._btn_add.installEventFilter(self)
-
-        layout.addWidget(self._tabs)
+        # ── 内容区（每便签一页：viewer/editor 双层）──
+        self._content_stack = QStackedWidget()
+        layout.addWidget(self._content_stack)
 
         self.installEventFilter(self)
-
-    def _reposition_plus_button(self) -> None:
-        """将 ⊕ 按钮对齐到 QTabBar 最右侧（与标签文字同容器）。"""
-        tb = self._tabs.tabBar()
-        btn = self._btn_add
-        if tb is None or btn is None:
-            return
-        x = tb.width() - btn.width() - 4  # 距右边缘 4px
-        y = (tb.height() - btn.height()) // 2  # 垂直居中
-        btn.move(max(0, x), max(0, y))
-        btn.raise_()
 
     def _create_tab_content(self, filepath: str, content: str) -> QStackedWidget:
         """为指定文件构造 QStackedWidget（viewer + editor）。
@@ -691,12 +708,12 @@ class WallpaperWindow(QWidget):
 
         # ── 显示层 ──
         viewer = QTextBrowser()
-        viewer.setOpenExternalLinks(False)
+        viewer.setOpenExternalLinks(True)  # http(s) 链接点击后在系统浏览器打开
         viewer.setReadOnly(True)
         viewer.setFrameShape(QTextBrowser.Shape.NoFrame)
         viewer.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         viewer.setStyleSheet(generate_content_qss(self._theme, final_br))
-        viewer.setHtml(render(content, self._theme))
+        viewer.setHtml(render(content, self._theme, base_dir=Path(filepath).parent))
         viewer.viewport().setAutoFillBackground(False)  # 透出 QStackedWidget 边框
         # 文字辉光（基于文字自身颜色，按距离变暗）
         if ct.get("enable_glow", False):
@@ -873,7 +890,7 @@ class WallpaperWindow(QWidget):
 
         # 刷新显示（会重置滚动位置）
         viewer: QTextBrowser = stack.widget(0)
-        viewer.setHtml(render(content, self._theme))
+        viewer.setHtml(render(content, self._theme, base_dir=Path(fp).parent))
         stack.setCurrentIndex(0)
         self._set_scroll_pct(viewer, scroll_pct)
 
@@ -888,7 +905,7 @@ class WallpaperWindow(QWidget):
         if fp:
             content = self._read_file(fp)
             viewer: QTextBrowser = stack.widget(0)
-            viewer.setHtml(render(content, self._theme))
+            viewer.setHtml(render(content, self._theme, base_dir=Path(fp).parent))
 
     # ── _just_saved 标记管理（防 watchdog 回刷）────────────────
 
@@ -918,71 +935,306 @@ class WallpaperWindow(QWidget):
         if cb:
             cb()
 
-    def _on_tab_context_menu(self, pos: QPoint) -> None:
-        tab_bar = self._tabs.tabBar()
-        idx = tab_bar.tabAt(pos)
-        if idx < 0:
-            return
-        stack = self._tabs.widget(idx)
-        filepath = self._fp_by_widget.get(id(stack), "") if stack else ""
+    # ── 标签行（分组导航）────────────────────────────────────────
 
+    def set_open_drawers(self, keys: list[str]) -> None:
+        """启动恢复：设置展开的抽屉（window 是状态源）。"""
+        self._open_drawers = [str(k) for k in keys]
+        self._strip.set_open_drawers(self._open_drawers)
+
+    def rebuild_strip(self) -> None:
+        """按分组树重建标签行（GUI 是文件系统的投影）。
+
+        只恢复已保存的展开状态，不因「当前激活便签」强行展开其祖先抽屉——
+        否则启动时会覆盖用户持久化的收起状态（activate_note 才做 reveal）。
+        """
+        tree = self._get_tree()
+        if tree is None:
+            return
+        self._tree_cache = tree
+        self._strip.rebuild(tree)
+        self._strip.set_open_drawers(self._open_drawers)
+        if self._active_fp:
+            self._strip.set_active(self._active_fp)
+
+    def _get_tree(self) -> FolderNode | None:
+        cb = self._callbacks.get("get_tree")
+        return cb() if cb else None
+
+    def _group_of(self, filepath: str) -> str:
+        """便签所属分组（树内查找，找不到返回 ''）。"""
+        def walk(node: FolderNode) -> str | None:
+            for info in node.notes:
+                if info.filepath == filepath:
+                    return node.rel_path
+            for sub in node.folders:
+                found = walk(sub)
+                if found is not None:
+                    return found
+            return None
+        if self._tree_cache is None:
+            return ""
+        return walk(self._tree_cache) or ""
+
+    @staticmethod
+    def _iter_notes(node: FolderNode):
+        yield from node.notes
+        for sub in node.folders:
+            yield from WallpaperWindow._iter_notes(sub)
+
+    @staticmethod
+    def _find_folder(node: FolderNode | None, rel_path: str) -> FolderNode | None:
+        if node is None:
+            return None
+        if node.rel_path == rel_path:
+            return node
+        for sub in node.folders:
+            found = WallpaperWindow._find_folder(sub, rel_path)
+            if found is not None:
+                return found
+        return None
+
+    def _count_notes_in(self, rel_path: str) -> int:
+        node = self._find_folder(self._tree_cache, rel_path)
+        if node is None:
+            return 0
+        return len(list(self._iter_notes(node)))
+
+    def _all_folder_rels(self) -> list[str]:
+        out: list[str] = []
+
+        def walk(node: FolderNode) -> None:
+            for sub in node.folders:
+                out.append(sub.rel_path)
+                walk(sub)
+
+        if self._tree_cache is not None:
+            walk(self._tree_cache)
+        return out
+
+    # ── 标签行信号 ──────────────────────────────────────────────
+
+    def _on_drawers_changed(self, keys: list) -> None:
+        self._open_drawers = [str(k) for k in keys]
+        self._config.set_open_drawers(self._open_drawers)
+
+    def _on_strip_drag_started(self) -> None:
+        self._strip_drag_origin = self.frameGeometry().topLeft()
+
+    def _on_strip_drag_moved(self, delta: QPoint) -> None:
+        if self._strip_drag_origin is not None:
+            self.move(self._strip_drag_origin + delta)
+
+    def _on_strip_drag_finished(self) -> None:
+        self._strip_drag_origin = None
+        g = self.geometry()
+        self._config.set_window_geometry(g.x(), g.y(), g.width(), g.height())
+
+    # ── 右键菜单 ────────────────────────────────────────────────
+
+    def _on_note_context(self, filepath: str, global_pos: QPoint) -> None:
         menu = QMenu(self)
         action_rename = QAction("重命名", menu)
-        action_delete = QAction("删除", menu)
+        action_rename.triggered.connect(
+            lambda checked=False: self._rename_note(filepath))
         menu.addAction(action_rename)
+
+        # 移动到…（根目录 + 全部分组，排除当前所在分组）
+        move_menu = QMenu("移动到…", menu)
+        act_root = QAction("根目录", move_menu)
+        act_root.triggered.connect(
+            lambda checked=False: self._move_note(filepath, ""))
+        move_menu.addAction(act_root)
+        parent_group = self._group_of(filepath)
+        for rel in self._all_folder_rels():
+            if rel == parent_group:
+                continue
+            act = QAction(rel, move_menu)
+            act.triggered.connect(
+                lambda checked=False, r=rel: self._move_note(filepath, r))
+            move_menu.addAction(act)
+        action_move = QAction("移动到…", menu)
+        action_move.setMenu(move_menu)
+        menu.addAction(action_move)
+
+        action_delete = QAction("删除", menu)
+        action_delete.triggered.connect(
+            lambda checked=False: self._delete_note(filepath))
         menu.addAction(action_delete)
 
-        action = menu.exec(tab_bar.mapToGlobal(pos))
-        if action is action_rename:
-            old_stem = Path(filepath).stem
-            new_name, ok = QInputDialog.getText(
-                self, "重命名便签", "新名称：", text=old_stem,
-            )
-            if ok and new_name.strip() and new_name.strip() != old_stem:
-                cb = self._callbacks.get("on_rename_note")
-                if cb:
-                    cb(filepath, new_name.strip())
-        elif action is action_delete:
-            reply = QMessageBox.question(
-                self,
-                "删除便签",
-                f"确定删除「{Path(filepath).stem}」？\n此操作不可恢复。",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                cb = self._callbacks.get("on_delete_note")
-                if cb:
-                    cb(filepath)
+        menu.exec(global_pos)
 
-    def _on_tab_changed(self, index: int) -> None:
-        """标签切换：保存上一个标签的编辑内容（如在编辑模式），不刷新新标签（由 watchdog 自动处理）。"""
-        # 保存上一个标签的编辑内容
-        prev = getattr(self, '_prev_tab_index', -1)
-        if prev >= 0 and prev < self._tabs.count():
-            prev_stack: QStackedWidget = self._tabs.widget(prev)
-            if prev_stack is not None and prev_stack.currentIndex() == 1:
-                editor = prev_stack.widget(1).findChild(QPlainTextEdit) if prev_stack.widget(1) else None
-                scroll_pct = self._get_scroll_pct(editor) if editor else 0.0
-                content = editor.toPlainText() if editor else ""
-                prev_stack_w = self._tabs.widget(prev)
-                prev_fp = self._fp_by_widget.get(id(prev_stack_w), "") if prev_stack_w else ""
-                # 标记为己保存——避免 watchdog 回刷导致滚动抖动
-                if prev_fp:
-                    self._mark_just_saved(prev_fp)
-                save_cb = self._callbacks.get("on_save_content")
-                if save_cb and prev_fp:
-                    save_cb(prev_fp, content)
-                # 切回显示模式
-                viewer: QTextBrowser = prev_stack.widget(0)
-                viewer.setHtml(render(content, self._theme))
-                prev_stack.setCurrentIndex(0)
-                self._set_scroll_pct(viewer, scroll_pct)
+    def _on_folder_context(self, rel_path: str, global_pos: QPoint) -> None:
+        menu = QMenu(self)
+        act_new_note = QAction("新建便签", menu)
+        act_new_note.triggered.connect(
+            lambda checked=False: self._create_note_in(rel_path))
+        act_new_folder = QAction("新建子文件夹", menu)
+        act_new_folder.triggered.connect(
+            lambda checked=False: self._create_folder_in(rel_path))
+        act_rename = QAction("重命名", menu)
+        act_rename.triggered.connect(
+            lambda checked=False: self._rename_folder(rel_path))
+        act_delete = QAction("删除", menu)
+        act_delete.triggered.connect(
+            lambda checked=False: self._delete_folder(rel_path))
+        for a in (act_new_note, act_new_folder, act_rename, act_delete):
+            menu.addAction(a)
+        menu.exec(global_pos)
 
-        self._prev_tab_index = index
+    def _show_root_create_menu(self, global_pos: QPoint) -> None:
+        """行尾 `+` 右键 / 行空白处右键：新建便签 / 新建文件夹。"""
+        menu = QMenu(self)
+        act_note = QAction("新建便签", menu)
+        act_note.triggered.connect(lambda checked=False: self._on_add_clicked())
+        act_folder = QAction("新建文件夹", menu)
+        act_folder.triggered.connect(
+            lambda checked=False: self._create_folder_in(""))
+        menu.addAction(act_note)
+        menu.addAction(act_folder)
+        menu.exec(global_pos)
 
-        # 确保磨砂噪点层在最上层（QStackedWidget 切换会覆盖子widget）
-        self._ensure_noise_ontop()
+    # ── 便签 / 分组操作（翻译为回调）────────────────────────────
+
+    def _rename_note(self, filepath: str) -> None:
+        old_stem = Path(filepath).stem
+        new_name, ok = QInputDialog.getText(
+            self, "重命名便签", "新名称：", text=old_stem,
+        )
+        if ok and new_name.strip() and new_name.strip() != old_stem:
+            cb = self._callbacks.get("on_rename_note")
+            if cb:
+                cb(filepath, new_name.strip())
+
+    def _delete_note(self, filepath: str) -> None:
+        reply = QMessageBox.question(
+            self,
+            "删除便签",
+            f"确定删除「{Path(filepath).stem}」？\n此操作不可恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            cb = self._callbacks.get("on_delete_note")
+            if cb:
+                cb(filepath)
+
+    def _move_note(self, filepath: str, target_group: str) -> None:
+        cb = self._callbacks.get("on_move_note")
+        if cb:
+            cb(filepath, target_group)
+
+    def _create_note_in(self, rel_group: str) -> None:
+        name, ok = QInputDialog.getText(self, "新建便签", "名称：")
+        if ok and name.strip():
+            cb = self._callbacks.get("on_create_note")
+            if cb:
+                cb(name.strip(), rel_group)
+
+    def _create_folder_in(self, parent_rel: str) -> None:
+        name, ok = QInputDialog.getText(self, "新建文件夹", "名称：")
+        if ok and name.strip():
+            rel = f"{parent_rel}/{name.strip()}" if parent_rel else name.strip()
+            cb = self._callbacks.get("on_create_folder")
+            if cb:
+                cb(rel)
+
+    def _rename_folder(self, rel_path: str) -> None:
+        old_name = rel_path.split("/")[-1]
+        new_name, ok = QInputDialog.getText(
+            self, "重命名文件夹", "新名称：", text=old_name,
+        )
+        if ok and new_name.strip() and new_name.strip() != old_name:
+            cb = self._callbacks.get("on_rename_folder")
+            if cb:
+                cb(rel_path, new_name.strip())
+
+    def _delete_folder(self, rel_path: str) -> None:
+        name = rel_path.split("/")[-1]
+        cnt = self._count_notes_in(rel_path)
+        reply = QMessageBox.question(
+            self,
+            "删除文件夹",
+            f"确定删除文件夹「{name}」\n及其中的 {cnt} 条便签？此操作不可恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            cb = self._callbacks.get("on_delete_folder")
+            if cb:
+                cb(rel_path)
+
+    # ── 结构变化（由 app.py 的 NotesManager 信号驱动）───────────
+
+    def on_note_moved(self, old_fp: str, new_fp: str) -> None:
+        """便签移动的页面迁移兜底（note_deleted/added 已各自处理）。"""
+        page = self._pages.get(str(old_fp))
+        if page is None:
+            return
+        was_active = self._active_fp == str(old_fp)
+        self._pages.pop(str(old_fp))
+        self._fp_by_page.pop(id(page), None)
+        self._pages[str(new_fp)] = page
+        self._fp_by_page[id(page)] = str(new_fp)
+        if was_active:
+            self._active_fp = str(new_fp)
+            self._content_stack.setCurrentWidget(page)
+        self.rebuild_strip()
+
+    def on_folder_added(self, rel_path: str) -> None:
+        self._sync_pages_with_tree()
+
+    def on_folder_renamed(self, old_rel: str, new_rel: str) -> None:
+        self._open_drawers = [
+            self._remap_rel(k, old_rel, new_rel) for k in self._open_drawers
+        ]
+        self._config.set_open_drawers(self._open_drawers)
+        self._sync_pages_with_tree()
+
+    def on_folder_deleted(self, rel_path: str) -> None:
+        self._open_drawers = [
+            k for k in self._open_drawers
+            if not (k == rel_path or k.startswith(rel_path + "/"))
+        ]
+        self._config.set_open_drawers(self._open_drawers)
+        self._sync_pages_with_tree()
+
+    @staticmethod
+    def _remap_rel(key: str, old_rel: str, new_rel: str) -> str:
+        if key == old_rel:
+            return new_rel
+        if key.startswith(old_rel + "/"):
+            return new_rel + key[len(old_rel):]
+        return key
+
+    def _sync_pages_with_tree(self) -> None:
+        """让页面注册表与分组树一致（分组重命名/删除的同步兜底）。"""
+        tree = self._get_tree()
+        if tree is None:
+            return
+        self._tree_cache = tree
+        all_fps = {info.filepath for info in self._iter_notes(tree)}
+
+        for fp in [fp for fp in list(self._pages) if fp not in all_fps]:
+            page = self._pages.pop(fp)
+            self._fp_by_page.pop(id(page), None)
+            if self._active_fp == fp:
+                self._active_fp = None
+            self._content_stack.removeWidget(page)
+            page.deleteLater()
+
+        for fp in sorted(all_fps - set(self._pages)):
+            page = self._create_tab_content(fp, self._read_file(fp))
+            self._pages[fp] = page
+            self._fp_by_page[id(page)] = fp
+            self._content_stack.addWidget(page)
+
+        # 先按最新展开状态重建标签行，再恢复激活——
+        # 若先激活，reveal_note 会用过期 strip 状态发射 drawers_changed，
+        # 覆盖 on_folder_renamed/remap 后的 self._open_drawers
+        self.rebuild_strip()
+        if self._active_fp is None and self._pages:
+            self.activate_note(next(iter(self._pages)))
 
     # ── 磨砂噪点层保顶 ────────────────────────────────────────────
 
@@ -1003,45 +1255,6 @@ class WallpaperWindow(QWidget):
             if noise_id in self._noise_widgets:
                 self._noise_widgets[noise_id].resize(event.size())
                 # 不 return True——让 QStackedWidget 继续正常处理
-        if obj is self._tabs.tabBar() and etype == QEvent.Type.Resize:
-            self._reposition_plus_button()
-            return False  # 不拦截，让 QTabBar 继续处理
-
-        # ── 标签栏 / ⊕ 按钮拖拽窗口 ──
-        # 点击标签是点击，长按拖拽是拖拽，通过距离阈值区分
-        if obj in (self._tabs.tabBar(), self._btn_add):
-            if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-                self._tab_drag_press_pos = event.globalPosition().toPoint()
-                self._tab_drag_engaged = False
-                return False  # 不拦截——让标签栏/按钮正常处理点击
-
-            if etype == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.LeftButton:
-                if self._tab_drag_press_pos is not None:
-                    gp = event.globalPosition().toPoint()
-                    if not self._tab_drag_engaged:
-                        dist = (gp - self._tab_drag_press_pos).manhattanLength()
-                        if dist >= QApplication.startDragDistance():
-                            self._tab_drag_engaged = True
-                            self._drag_offset = self._tab_drag_press_pos - self.frameGeometry().topLeft()
-                    if self._tab_drag_engaged:
-                        self.move(gp - self._drag_offset)
-                        self.setCursor(Qt.CursorShape.ClosedHandCursor)
-                        return True  # 拦截——防止标签切换
-                return False
-
-            if etype == QEvent.Type.MouseButtonRelease:
-                engaged = self._tab_drag_engaged
-                self._tab_drag_press_pos = None
-                self._tab_drag_engaged = False
-                if engaged:
-                    self.setCursor(Qt.CursorShape.ArrowCursor)
-                    # 保存窗口位置
-                    g = self.geometry()
-                    self._config.set_window_geometry(g.x(), g.y(), g.width(), g.height())
-                    return True  # 拦截释放事件，防止触发标签/按钮点击
-                return False
-
-            return super().eventFilter(obj, event)
 
         editing = self._is_editing()
 
@@ -1199,29 +1412,20 @@ class WallpaperWindow(QWidget):
         self.move(fg.topLeft())
 
     def _current_stack(self) -> QStackedWidget | None:
-        return self._tabs.currentWidget()
+        if self._active_fp is None:
+            return None
+        return self._pages.get(self._active_fp)
 
     def _current_filepath(self) -> str:
-        stack = self._current_stack()
-        return self._fp_by_widget.get(id(stack), "") if stack else ""
+        return self._active_fp or ""
 
     def _has_tabs(self) -> bool:
-        return self._tabs.count() > 0
+        return bool(self._pages)
 
     def _is_editing(self) -> bool:
-        """当前标签是否处于编辑模式。"""
-        if not self._has_tabs():
-            return False
+        """当前便签是否处于编辑模式。"""
         stack = self._current_stack()
         return stack is not None and stack.currentIndex() == 1
-
-    def _find_tab_index(self, filepath: str) -> int:
-        """按文件路径查找标签索引，未找到返回 -1。"""
-        for i in range(self._tabs.count()):
-            stack = self._tabs.widget(i)
-            if stack and self._fp_by_widget.get(id(stack)) == filepath:
-                return i
-        return -1
 
     @staticmethod
     def _read_file(filepath: str) -> str:

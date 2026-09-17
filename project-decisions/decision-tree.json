@@ -1,0 +1,748 @@
+{
+  "meta": {
+    "project": "Wallpaper_Notes",
+    "description": "桌面便签工具——快速调出、快速写入、快速退出，桌面常态美观显示",
+    "skill": "native-decision-coding-agent",
+    "skill_version": "0.2.0",
+    "created_at": "2026-07-30",
+    "last_updated": "2026-09-17"
+  },
+  "nodes": [
+    {
+      "id": "R0",
+      "title": "项目顶层定位",
+      "statement": "提供一个桌面便签工具，支持用户通过系统级快捷键随时调出、秒级完成记录后快速退回工作流，并在桌面常态下以足够美观的方式持续显示便签内容。",
+      "non_negotiables": [
+        "调出方式必须是系统级全局快捷键，不依赖窗口焦点",
+        "记录流程必须是「快捷键唤出 → 打字 → Esc 退出」，中间不能有多余步骤",
+        "窗口默认在桌面层（HWND_BOTTOM），不遮挡工作中的应用",
+        "便签以 .md 文件存储在文件系统中，人和 AI 均可直接读写，标准格式便于导出和写入",
+        "默认视觉在桌面上必须可接受，通过自定义可达美观"
+      ],
+      "status": "active",
+      "decision_type": "root",
+      "parent_ids": [],
+      "tags": [
+        "core",
+        "product"
+      ],
+      "reasoning": "项目核心价值来自三个方向：提醒（桌面可见）、记录（低摩擦捕获）、美学（桌面不违和）。将文件系统作为唯一真相源，保证数据与程序解耦。",
+      "evidence": [
+        "PRD.md §1 产品定位",
+        "PRD.md §2.1 整体映射关系",
+        "README.md 功能描述"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "A1",
+      "title": "零步骤唤出",
+      "statement": "用户必须在任何场景下（包括全屏应用）通过一个系统级快捷键，直接将便签窗口置顶并进入可编辑状态，不需要先找到窗口、点击或切换应用。",
+      "parent_ids": [
+        "R0"
+      ],
+      "status": "active",
+      "decision_type": "general",
+      "tags": [
+        "interaction",
+        "hotkey"
+      ],
+      "reasoning": "快速调出的核心是消除『先激活窗口再操作』的中间步骤。快捷键触发时必须同时完成窗口置顶、焦点切换和编辑模式进入三个动作。",
+      "evidence": [
+        "PRD.md §3.4 快捷键系统",
+        "PRD.md §5.3 快速记录流程"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "A2",
+      "title": "写即保存",
+      "statement": "从『想法出现』到『内容已落盘』，用户的操作路径不能有『确认』『命名』『选位置』等中间步骤。唯一操作序列是：打字 → Esc。Esc 同时完成保存文件、退出编辑、窗口退回桌面层三个动作。",
+      "parent_ids": [
+        "R0"
+      ],
+      "status": "active",
+      "decision_type": "general",
+      "tags": [
+        "interaction",
+        "editing"
+      ],
+      "reasoning": "快速写入的核心是消除记录过程中的任何摩擦。双击进入编辑、Esc 一体退出，标签切换自动保存当前编辑内容，都是为这条原则服务。多便签切换属于『写到哪个文件』的二级问题。",
+      "evidence": [
+        "PRD.md §3.3 内容编辑",
+        "PRD.md §5.3 快速记录流程",
+        "架构设计.md §4.2 编辑流程"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "A3",
+      "title": "常驻后台无感运行",
+      "statement": "应用必须后台持续运行（开机自动启动），仅通过系统托盘存在，不占用用户注意力，不干扰前台应用。不存在『关闭窗口』操作——退出只能通过托盘菜单。所有状态（窗口位置、最后标签页等）重启后保持。",
+      "parent_ids": [
+        "R0"
+      ],
+      "status": "active",
+      "decision_type": "general",
+      "tags": [
+        "architecture",
+        "background"
+      ],
+      "reasoning": "核心条件：桌面便签工具如果每次都要手动启动，就违背了『随时可看』的价值。开机自启、托盘驻留、状态持久化三者共同保证『打开电脑就能用』。",
+      "evidence": [
+        "PRD.md §3.6 开机自启",
+        "PRD.md §3.5 系统托盘",
+        "架构设计.md §4.1 启动流程"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "A4",
+      "title": "文件即便签",
+      "statement": "每个便签的内容作为一个独立的 .md 文件存储在 notes/ 目录中，文件名即标签名。程序内外读写同一份数据，不存在私有格式或导入导出步骤。外部程序（包括 AI Agent）可直接写入 .md 文件，应用自动检测变化并刷新显示。",
+      "parent_ids": [
+        "R0"
+      ],
+      "status": "active",
+      "decision_type": "general",
+      "tags": [
+        "architecture",
+        "data"
+      ],
+      "reasoning": "文件系统是唯一的真相源。GUI 操作和文件系统监听解耦，两者通过文件系统自然同步。.md 格式是标准笔记存储格式，便于导出、写入，格式清晰。",
+      "evidence": [
+        "PRD.md §2.1 整体映射关系",
+        "PRD.md §2.2 操作与映射解耦",
+        "PRD.md §3.7 AI 集成",
+        "架构设计.md §6.1 操作与映射解耦"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "A5",
+      "title": "桌面不违和",
+      "statement": "窗口默认外观在桌面上不显得突兀，且用户能自定义颜色、字体、透明度、圆角等视觉参数以达到满意效果。视觉配置与功能配置分离，互不影响。",
+      "parent_ids": [
+        "R0"
+      ],
+      "status": "active",
+      "decision_type": "general",
+      "tags": [
+        "ui",
+        "ux",
+        "customization"
+      ],
+      "reasoning": "便签常驻桌面，视觉侵入感直接决定用户是否愿意保留它。美学要求不是可选的锦上添花，而是桌面场景的必要属性。配置分离（theme.json vs config.json）保证样式修改不影响功能。",
+      "evidence": [
+        "PRD.md §4 配置文件规范",
+        "架构设计.md §6.2 配置分离",
+        "README.md 自定义配置"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B1",
+      "title": "系统级全局热键注册",
+      "statement": "使用 Windows API RegisterHotKey + QAbstractNativeEventFilter 注册系统级热键，零额外依赖。快捷键不与窗口焦点绑定，在任何应用中均可触发。",
+      "parent_ids": [
+        "A1"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "implementation",
+        "windows"
+      ],
+      "reasoning": "Qt 内置的 QShortcut 依赖窗口焦点，无法在全屏/失焦场景下工作。RegisterHotKey 是 Windows 标准方案，配合 MOD_NOREPEAT 防重复触发。",
+      "evidence": [
+        "架构设计.md §2.3 hotkey.py — 本质职责",
+        "架构设计.md §7 技术选型（全局快捷键 row）"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B2",
+      "title": "快捷键触发联动：置顶+编辑+聚焦",
+      "statement": "快捷键触发时，窗口必须同时完成 HWND_TOPMOST 置顶、QStackedWidget 切换到编辑模式、QPlainTextEdit 获取焦点三个动作，用户看到窗口时已可直接打字。",
+      "parent_ids": [
+        "A1"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "interaction",
+        "implementation"
+      ],
+      "reasoning": "三个动作拆开执行会给用户『先看到窗口→再等切换→再点输入框』的顿挫感。同时执行让用户在感知上『按了快捷键窗口就来了，而且已经能写字』。",
+      "evidence": [
+        "架构设计.md §2.3 window.py — bring_to_front_and_edit()",
+        "架构设计.md §4.1 启动流程（先 show 再注册热键确保 HWND 稳定）"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B3",
+      "title": "快捷键可配置",
+      "statement": "用户必须能在设置界面修改全局快捷键（修饰键组合 + 主键），修改后立即生效。默认值为 Ctrl+Alt+A（唤起便签置顶编辑）。",
+      "parent_ids": [
+        "A1",
+        "B16"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "ux",
+        "configuration"
+      ],
+      "change_reviews": [
+        "CR-20260730-001"
+      ],
+      "reasoning": "不同用户有不同的快捷键习惯，硬编码会强迫用户适应工具。同时服务于 A1（零步骤唤出）和 B16（设置对话框）：既是唤出体验的必要条件，也是设置对话框的核心功能之一。提供配置界面而非要求用户改 JSON，保持低门槛。",
+      "evidence": [
+        "PRD.md §3.4 快捷键系统",
+        "架构设计.md §4.5 设置流程"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B4",
+      "title": "原地切换显示/编辑模式",
+      "statement": "显示模式和编辑模式必须通过 QStackedWidget 在同一位置切换，不打开新窗口、不弹对话框、不切换到其他界面。Index 0 为 QTextBrowser（显示），Index 1 为 QPlainTextEdit（编辑）。",
+      "parent_ids": [
+        "A2"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "ui",
+        "implementation"
+      ],
+      "reasoning": "打开新窗口或切换界面会破坏『就在原位置』的直觉，增加用户认知负担。QStackedWidget 的双层切换是 Qt 标准做法，实现简单且稳定。",
+      "evidence": [
+        "架构设计.md §3.2 模式切换",
+        "架构设计.md §2.3 window.py — _switch_edit / _save_and_switch_view"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B5",
+      "title": "Esc 一体退出流程",
+      "statement": "按 Esc 时必须同时完成『保存 .md 文件 → QStackedWidget 切回显示模式 → 窗口退回 HWND_BOTTOM 桌面层』三个动作，用户按一次 Esc 即回到工作状态。",
+      "parent_ids": [
+        "A2"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "interaction",
+        "implementation"
+      ],
+      "reasoning": "分步退出（先保存、再切模式、再退桌面层）要求用户多次操作，增加『写完想走但走不掉』的摩擦。一体退出是『写即保存』的直接体现。",
+      "evidence": [
+        "架构设计.md §4.2 编辑流程（Esc 分支）",
+        "架构设计.md §2.3 window.py — _save_and_switch_view"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B6",
+      "title": "切标签自动保存当前编辑",
+      "statement": "用户切换到其他标签时，系统必须自动保存当前标签的编辑内容，不允许『切换标签后当前编辑内容丢失』的状态出现。",
+      "parent_ids": [
+        "A2"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "data-integrity",
+        "implementation"
+      ],
+      "reasoning": "切标签时不保存会导致用户因误切而丢失内容，这违反了『内容不可丢失』的基本信任。自动保存 + Esc 手动保存构成双重保障。",
+      "evidence": [
+        "架构设计.md §2.3 window.py — _on_tab_changed"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B7",
+      "title": "编辑/预览滚动位置百分比同步",
+      "statement": "在编辑模式和显示模式之间切换时，使用垂直滚动百分比（0.0 ~ 1.0）作为锚定度量同步滚动位置。不使用 block/character 锚定，因编辑器和阅览器的文档树结构不同。同步使用 round() 四舍五入以避免单向漂移，同步时关绘制（setUpdatesEnabled）避免闪烁。",
+      "parent_ids": [
+        "A2"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "ux",
+        "implementation"
+      ],
+      "reasoning": "两种 widget（QPlainTextEdit vs QTextBrowser）的文档树无法对应（等宽纯文本 vs HTML 块级元素），百分比锚定是唯一通用的度量。round() 而非 int() 保证快速切换时误差不单向积累。同步设值而非 QTimer 避免时序漏洞导致的滚动回跳。",
+      "evidence": [
+        "架构设计.md §6.6 编辑/预览模式切换时的滚动位置同步"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "C7_1",
+      "title": "文件变更防冲撞机制",
+      "statement": "用户按 Esc 保存文件时，使用 _just_saved 标记集合记录已保存的文件路径，配合 3 秒刷新式单一定时器。watchdog 检测到修改时先检查该路径是否在 _just_saved 中——如果在则跳过刷新。用户连续保存时定时器自动续期，仅在用户停止操作 3 秒后清除标记，避免因跨线程信号时序导致的滚动位置漂移累积。",
+      "parent_ids": [
+        "B7"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "implementation",
+        "watchdog"
+      ],
+      "reasoning": "用户按 Esc 保存后，watchdog 约 1 秒后检测到文件变更触发 refresh_current_tab，叠加 _set_scroll_pct 的 round() 误差，导致用户感知的『回正』或『漂移』。_just_saved 标记直接跳过本次刷新，3 秒刷新式单一定时器防止连续保存时清除窗口误打开。",
+      "evidence": [
+        "架构设计.md §6.6 — watchdog 防冲撞机制"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B8",
+      "title": "系统托盘生命周期管制",
+      "statement": "应用启动时自动创建系统托盘 QSystemTrayIcon，退出只能通过托盘右键菜单。窗口本身无关闭/最小化按钮，用户不能通过常规方式『关闭』窗口。",
+      "parent_ids": [
+        "A3"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "architecture",
+        "implementation"
+      ],
+      "reasoning": "如果窗口可以单独关闭，用户下次『想看便签』时发现窗口不在了，违背了『全天候可见』的承诺。窗口行为与托盘生命周期绑定，保证应用要么运行、要么已退出，不存在中间状态。",
+      "evidence": [
+        "PRD.md §3.5 系统托盘",
+        "架构设计.md §2.3 tray.py — 本质职责"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B9",
+      "title": "开机自启",
+      "statement": "支持开机自动启动，通过 Windows 注册表 HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run 实现。提供开关，用户可在设置界面或托盘菜单中启用/禁用。",
+      "parent_ids": [
+        "A3"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "implementation",
+        "windows"
+      ],
+      "reasoning": "桌面便签工具的核心价值之一是『打开电脑就在』，如果每次需要手动启动就失去了『随时可看』的意义。注册表方案是 Windows 标准做法，零额外依赖。",
+      "evidence": [
+        "PRD.md §3.6 开机自启",
+        "PRD.md §7 技术栈建议（注册表写入）"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B10",
+      "title": "状态跨重启持久化",
+      "statement": "窗口位置、窗口大小、最后活动标签页等运行时状态必须持久化到 config.json，启动时自动恢复。不允许每次启动窗口都回到默认位置。",
+      "parent_ids": [
+        "A3"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "ux",
+        "implementation"
+      ],
+      "reasoning": "如果窗口每次启动都回到默认位置，用户每次都要重新摆放，是一种累积摩擦。记住用户的自定义位置是『无感运行』的基本要求。",
+      "evidence": [
+        "架构设计.md §2.3 config.py — 本质职责",
+        "PRD.md §4.1 config.json（window.x/y/width/height）"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B11",
+      "title": "启动全量扫描 notes/",
+      "statement": "应用启动时扫描 notes/ 目录下所有 .md 文件，每个文件生成一个标签页。不存在任何『导入』流程——用户将 .md 放入 notes/ 目录即自动出现在便签列表中。",
+      "parent_ids": [
+        "A4"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "implementation"
+      ],
+      "reasoning": "文件系统是唯一真相源，标签列表是文件系统的投影。启动时全量扫描保证程序重启后标签状态与文件系统完全一致，不存在『程序里的标签』和『实际的文件』不同步的情况。",
+      "evidence": [
+        "PRD.md §2.1 整体映射关系",
+        "架构设计.md §2.3 notes_manager.py — scan_all()"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B12",
+      "title": "运行时文件系统监听",
+      "statement": "使用 watchdog PollingObserver 持续监听 notes/ 目录变化，300ms 防抖。外部写入（包括 AI Agent 写入）自动触发标签刷新。支持三种事件：新增（创建标签）、修改（刷新内容）、删除（移除标签）。",
+      "parent_ids": [
+        "A4"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "implementation"
+      ],
+      "reasoning": "GUI 操作和外部程序写入通过文件系统自然同步，不需要内部消息传递机制。watchdog 的 PollingObserver 在 Windows 上稳定工作，300ms 防抖避免频繁写入时反复刷新。",
+      "evidence": [
+        "架构设计.md §2.3 notes_manager.py — 文件变化处理",
+        "架构设计.md §4.3 文件变更检测"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B13",
+      "title": "GUI 操作直接访问文件系统",
+      "statement": "用户在界面上新建/删除/重命名便签时，直接操作文件系统（创建 .md / 删除 .md / 重命名 .md），不经过缓存层。操作完成后通过文件系统监听触发同步，不与映射层直接耦合。",
+      "parent_ids": [
+        "A4"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "architecture"
+      ],
+      "reasoning": "GUI 只管执行操作，映射层只管检测变化，两者通过文件系统自然同步。这种解耦方式避免了双层数据冲突（操作层和映射层各自维护一份状态导致不一致）。实现已明确：notes_manager.py 的 create()/delete()/rename() 直接操作文件系统。",
+      "evidence": [
+        "PRD.md §2.2 操作与映射解耦",
+        "架构设计.md §6.1 操作与映射解耦",
+        "架构设计.md §2.3 notes_manager.py — 核心接口"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B14",
+      "title": "窗口无系统装饰融入桌面",
+      "statement": "窗口使用 Qt.FramelessWindowHint 无标题栏，无关闭/最小化/最大化按钮。常态下通过 SetWindowPos(hwnd, HWND_BOTTOM) 吸附在桌面层。窗口管理通过系统托盘完成，保证桌面不被多余 UI 元素打扰。",
+      "parent_ids": [
+        "A5"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "ui",
+        "implementation",
+        "windows"
+      ],
+      "reasoning": "标题栏和关闭按钮会让窗口看起来像一个『应用』而不是『贴在桌面上的一张纸』。HWND_BOTTOM 保证它在所有窗口后面，视觉上融入桌面。拖拽移动通过标签栏区域实现，缩放通过 8px 边缘检测。",
+      "evidence": [
+        "架构设计.md §2.3 window.py — _set_desktop_layer / _set_topmost",
+        "PRD.md §3.1 窗口系统",
+        "架构设计.md §3.3 窗口行为"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "C14_1",
+      "title": "圆角实现方案：setMask 而非 QSS",
+      "statement": "窗口圆角通过 setMask(QRegion(QPainterPath)) 实现，而非 QSS border-radius。原因是 WA_TranslucentBackground（分层窗口）下 QSS border-radius 在 Windows 中不生效。容器编辑器（editor_container）使用 QSS border-radius 维持底部圆角外观。",
+      "parent_ids": [
+        "B14"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "implementation",
+        "windows"
+      ],
+      "reasoning": "这是 Windows 分层窗口（WS_EX_LAYERED）的已知限制——QSS border-radius 在该模式下无效。setMask 是纯 API 方案，QPainterPath 可精确描述圆角矩形路径。同时，编辑器容器使用 QSS border-radius 是因为它不在分层窗口直接作用范围内。两个方案各有适用场景。",
+      "evidence": [
+        "架构设计.md §2.3 window.py — 圆角实现",
+        "架构设计.md §3.3 窗口行为（WA_TranslucentBackground）"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B15",
+      "title": "功能与样式配置分离",
+      "statement": "配置分为两个文件：config.json 承载功能配置（窗口位置、快捷键、开机自启等），theme.json 承载样式配置（颜色、字体、透明度、圆角、玻璃效果等）。两个文件独立持久化、独立修改。",
+      "parent_ids": [
+        "A5"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "implementation",
+        "configuration"
+      ],
+      "reasoning": "功能配置用户一般不常改，样式配置用户可能频繁调换皮肤。分离后用户改样式无需担心误触功能参数，改快捷键也不影响皮肤设置。两个文件的职责边界清晰，降低认知负担。",
+      "evidence": [
+        "PRD.md §4 配置文件规范",
+        "架构设计.md §6.2 配置分离"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B16",
+      "title": "所见即所得设置对话框",
+      "statement": "提供可视化设置对话框 SettingsDialog，用户无需手动编辑 JSON 即可修改所有主题参数和快捷键。点击 Apply 实时预览效果，不关闭对话框可连续调试。样式预览 QSS 注入即时生效。",
+      "parent_ids": [
+        "A5"
+      ],
+      "status": "active",
+      "decision_type": "general",
+      "tags": [
+        "ux",
+        "implementation"
+      ],
+      "reasoning": "要求非技术用户编辑 JSON 来换皮肤违背了低门槛原则。设置对话框通过颜色选择器、数值框、字体下拉菜单等标准控件管理主题参数，Apply 即时反馈让用户『试到满意为止』。",
+      "evidence": [
+        "PRD.md §4 配置文件规范",
+        "架构设计.md §2.3 settings.py — 本质职责",
+        "架构设计.md §4.5 设置流程"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "C16_1",
+      "title": "快捷键设置面板",
+      "statement": "设置对话框中包含快捷键修改面板，用户通过 CheckBox 选择修饰键组合（Ctrl / Alt / Shift / Win），ComboBox 选择主键（A-Z, F1-F12 等），修改后调用 hotkey.rebind() 即时生效，同时持久化到 config.json。",
+      "parent_ids": [
+        "B16"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "ui",
+        "implementation"
+      ],
+      "reasoning": "快捷键修改涉及三个层面：UI 提供选择控件、hotkey.rebind() 保证运行时立即生效、config.json 持久化保证重启后保持。三者缺一不可。",
+      "evidence": [
+        "架构设计.md §4.5 设置流程",
+        "架构设计.md §2.3 hotkey.py — rebind()"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "C16_2",
+      "title": "样式编辑面板",
+      "statement": "设置对话框中包含样式编辑面板，每个 theme.json 字段映射到对应的 UI 控件：颜色字段用 QColorDialog 或颜色选择器、字号字段用 QSpinBox / QSlider、字体字段用 QFontComboBox、数值字段用 QDoubleSpinBox、开关字段用 QCheckBox。Apply 时收集所有控件值生成完整 theme dict。",
+      "parent_ids": [
+        "B16"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "ui",
+        "implementation"
+      ],
+      "reasoning": "theme.json 字段类型明确（颜色、数值、字体、开关），每种类型映射到标准 Qt 控件。Apply 时统一收集而非逐个持久化，保证设置操作的原子性。",
+      "evidence": [
+        "架构设计.md §2.3 settings.py — 本质职责"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "C16_3",
+      "title": "字体管理面板",
+      "statement": "设置对话框中包含字体管理面板，显示已添加到 fonts/ 目录的 .ttf / .otf 字体列表。提供『添加字体』按钮，打开文件对话框选择字体文件后自动复制到 fonts/ 目录并通过 QFontDatabase.addApplicationFont() 注册到系统字体库，重启不丢失。",
+      "parent_ids": [
+        "B16"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "ui",
+        "implementation"
+      ],
+      "reasoning": "用户手动安装字体到系统目录门槛高（需要管理员权限），应用内字体管理降低用户操作成本。fonts/ 目录持久化 + QFontDatabase 注册的方案不需要系统级安装，权限低且保持数据隔离。",
+      "evidence": [
+        "架构设计.md §2.3 settings.py — 字体管理",
+        "架构设计.md §4.1 启动流程（QFontDatabase.addApplicationFont）"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "C16_4",
+      "title": "Apply 预览机制",
+      "statement": "设置对话框的 Apply 按钮通过发射 applied(theme_dict) 信号传递当前主题配置给 app.py，由 app.py 执行 theme.json 持久化和窗口样式刷新。对话框不关闭，用户可多次 Apply 调试不同效果，满意后再点 OK 关闭。",
+      "parent_ids": [
+        "B16"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "interaction",
+        "implementation"
+      ],
+      "reasoning": "Apply 不关闭对话框是『所见即所得』的核心实现。用户每次 Apply 都能看到即时变化，不需要『关闭 → 看效果 → 不满意再打开 → 再改』的循环。信号-槽模式保持 UI 层与持久化/刷新层的解耦。",
+      "evidence": [
+        "架构设计.md §4.5 设置流程",
+        "架构设计.md §2.3 settings.py — 核心接口（applied 信号）"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "B17",
+      "title": "开箱即用视觉基线",
+      "statement": "默认 theme.json 的配色、字号、透明度、圆角经过设计，在桌面上不突兀。纯白背景配 85% 半透明、12px 圆角、1px 细边框、20px 柔和阴影、Microsoft YaHei 字体——开箱即能正常使用，不要求用户先调样式。",
+      "parent_ids": [
+        "A5"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "design",
+        "ux"
+      ],
+      "reasoning": "如果默认样式是『程序员默认』（白底黑字、无圆角、不透明），用户第一眼就会关掉它，永远不会进入『自定义』步骤。开箱即用的视觉基线是美学价值交付的起点，不是终点。具体数值以 theme.json 默认值为准。",
+      "evidence": [
+        "PRD.md §4.2 theme.json 默认值",
+        "README.md 自定义配置预览图"
+      ],
+      "created_at": "2026-07-30",
+      "updated_at": "2026-07-30"
+    },
+    {
+      "id": "A6",
+      "title": "文件夹即分组（抽屉式导航）",
+      "statement": "notes/ 下的子文件夹即分组，递归嵌套、层级不限。分组不是独立数据——group 由文件相对位置推导。前端以「抽屉式标签行」呈现：标签行恒显示根目录直系子项，文件夹是一颗淡底胶囊，悬浮/点击拉出子项，父名永远是抽屉首项、点击即收起（=返回上级）；同级手风琴只开一个；激活组内便签时祖先抽屉自动展开。无图标——容器隐喻（左圆角小/右圆角大，底色递增）。",
+      "parent_ids": [
+        "R0"
+      ],
+      "status": "active",
+      "decision_type": "general",
+      "tags": [
+        "grouping",
+        "ux",
+        "architecture"
+      ],
+      "reasoning": "分组需求必须延续『文件系统是唯一真相源』：文件夹是最自然的分组载体，人和 AI 用 mkdir/mv 即可操作分组，无导入导出。前端不做视图切换（无『当前层』状态机），抽屉开合即导航——状态只剩『哪些抽屉开着』，与『贴在桌面上的一张纸』的低干扰定位一致。视觉走 HTML 原型签收稿（design-prototypes/group-tabs.html）：极简透明风下用容器底色而非图标表达层级。",
+      "evidence": [
+        "开发者指南/架构设计.md §8 便签分组——抽屉式标签行",
+        "models.py → FolderNode / NoteInfo.group",
+        "notes_manager.py → scan_tree / move / create_folder 等",
+        "ui_components.py → NoteStrip / FolderDrawer",
+        "tests/smoke_grouping.py（32 项离屏冒烟）"
+      ],
+      "created_at": "2026-09-17",
+      "updated_at": "2026-09-17"
+    },
+    {
+      "id": "B18",
+      "title": "分组后端：递归扫描 + 树投影 + 移动语义",
+      "statement": "scan_all() 用 rglob 递归收集 .md，NoteInfo.group 为相对 notes/ 的 posix 路径（根为空串）；scan_tree() 返回 FolderNode 树供 UI 整行重建。move 同名冲突自动 _2 后缀；文件夹 rename/delete 递归生效；watchdog recursive=True，文件夹事件独立信号，文件移动拆为 deleted+added；所有写操作经 _resolve_group_dir 路径安全检查。",
+      "parent_ids": [
+        "A6"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "implementation",
+        "data"
+      ],
+      "reasoning": "树投影让 GUI 保持『文件系统投影』哲学——结构变化时整行重建而非增量修补，避免双状态。move 语义（delete+add+moved 三信号）让页面迁移与标签重建自然衔接。路径安全检查沿原有 startswith 方案扩展，防 AI 写入越界路径。",
+      "evidence": [
+        "notes_manager.py → scan_all / scan_tree / move / create_folder / rename_folder / delete_folder / start_watching"
+      ],
+      "created_at": "2026-09-17",
+      "updated_at": "2026-09-17"
+    },
+    {
+      "id": "B19",
+      "title": "QTabWidget 退役：NoteStrip + 内容 QStackedWidget",
+      "statement": "标签行改为自定义 NoteStrip（便签 chip + FolderDrawer 抽屉 + 行尾低对比度 +），内容区为每便签一页的 QStackedWidget（viewer/editor 双层结构不变）。页面注册表 _pages: filepath→page；激活走 activate_note（先保存上一页编辑→切页→reveal 祖先抽屉）。拖窗口手势迁移至 strip 的 eventFilter（距离阈值区分点击/拖动，拖动期间抑制悬浮拉出）。",
+      "parent_ids": [
+        "A6"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "implementation",
+        "ui"
+      ],
+      "reasoning": "抽屉需要自包含可嵌套容器与宽度动画，超出 QTabBar 能力——正是 ui_components.py docstring 预留的改造点。双层 viewer/editor 页面结构原样保留，重构风险收敛在标签行与页面注册表。",
+      "evidence": [
+        "window.py → _build_ui / _pages / activate_note",
+        "ui_components.py → NoteStrip / FolderDrawer / NoteChip"
+      ],
+      "created_at": "2026-09-17",
+      "updated_at": "2026-09-17"
+    },
+    {
+      "id": "C19_1",
+      "title": "抽屉状态持久化与同步顺序约束",
+      "statement": "展开状态存 config.json window.open_drawers；strip.set_open_drawers 做祖先链归一化；文件夹重命名/删除后 remap/过滤该列表。_sync_pages_with_tree 必须先 rebuild_strip 再激活页面——若先激活，reveal_note 会用过期 strip 状态发射 drawers_changed 覆盖刚 remap 的列表。",
+      "parent_ids": [
+        "B19",
+        "B10"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "implementation",
+        "ux"
+      ],
+      "reasoning": "展开状态是『用户摆放』的一部分，须与窗口几何同等持久化。顺序约束是真实踩过的坑：smoke 测试曾在此失败，已固化进 tests/smoke_grouping.py 防回归。",
+      "evidence": [
+        "config.py → get_open_drawers / set_open_drawers",
+        "window.py → _on_drawers_changed / _sync_pages_with_tree",
+        "ui_components.py → set_open_drawers（祖先链归一化）"
+      ],
+      "created_at": "2026-09-17",
+      "updated_at": "2026-09-17"
+    },
+    {
+      "id": "C19_2",
+      "title": "抽屉视觉基线：容器隐喻无图标",
+      "statement": "文件夹 = 淡底胶囊（左圆角 3px/右圆角 10px），底色不透明度递增：闭合 rgba(0,0,0,.05) → 悬浮 .08 → 展开 .095，嵌套自然叠加变深；名称与子项间 1px 竖分隔线（提示收起手柄）；行尾 + 低对比度文本。样式键位于 theme.json tab_strip 节（7 个颜色/圆角项），设置对话框「分组抽屉」组可视化编辑。",
+      "parent_ids": [
+        "B19",
+        "A5",
+        "B17"
+      ],
+      "status": "active",
+      "decision_type": "terminal",
+      "tags": [
+        "ui",
+        "design"
+      ],
+      "reasoning": "沿用 R0『图标极简、不醒目』约束：层级识别靠容器底色与圆角方向，不引入任何字符/矢量图标，与极简透明主题一致。HTML 原型经用户两轮签收（括号方案→CSS 容器方案→左方右圆）。",
+      "evidence": [
+        "design-prototypes/group-tabs.html（签收稿）",
+        "theme.json → tab_strip",
+        "ui_components.py → generate_strip_qss",
+        "settings.py → _build_tab_strip_group"
+      ],
+      "created_at": "2026-09-17",
+      "updated_at": "2026-09-17"
+    }
+  ]
+}

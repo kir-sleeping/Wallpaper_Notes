@@ -69,11 +69,24 @@ class Config:
     # ── 快捷键 ──────────────────────────────────────────────────
 
     def get_hotkey(self) -> tuple[list[str], str]:
-        """返回 (modifiers_list, key)，如 (['ctrl', 'shift'], 'n')。"""
+        """返回 (modifiers_list, key)，如 (['ctrl', 'alt'], 'a')。"""
         hk = self._config.get("hotkey", {})
-        modifiers: list[str] = hk.get("modifiers", ["ctrl", "shift"])
-        key: str = hk.get("key", "n")
+        modifiers: list[str] = hk.get("modifiers", ["ctrl", "alt"])
+        key: str = hk.get("key", "a")
         return modifiers, key
+
+    # ── 分组抽屉展开状态 ────────────────────────────────────────
+
+    def get_open_drawers(self) -> list[str]:
+        """返回启动时应展开的分组抽屉（相对路径列表）。"""
+        win = self._config.get("window", {})
+        raw = win.get("open_drawers", [])
+        return [str(k) for k in raw] if isinstance(raw, list) else []
+
+    def set_open_drawers(self, keys: list[str]) -> None:
+        self._config.setdefault("window", {})
+        self._config["window"]["open_drawers"] = list(keys)
+        self.save_config(self._config)
 
     # ── 开机自启 ────────────────────────────────────────────────
 

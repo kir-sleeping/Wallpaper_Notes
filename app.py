@@ -55,6 +55,11 @@ class App:
             "on_create_note": self._on_create_note,
             "on_delete_note": self._on_delete_note,
             "on_rename_note": self._on_rename_note,
+            "on_move_note": self._on_move_note,
+            "on_create_folder": self._on_create_folder,
+            "on_rename_folder": self._on_rename_folder,
+            "on_delete_folder": self._on_delete_folder,
+            "get_tree": lambda: self._notes.scan_tree(),
         }
 
         # ── 窗口（最先创建，后续模块需要其 HWND）──
@@ -65,6 +70,10 @@ class App:
         self._notes.note_changed.connect(self._window.refresh_current_tab)
         self._notes.note_added.connect(self._window.add_tab)
         self._notes.note_deleted.connect(self._window.remove_tab)
+        self._notes.note_moved.connect(self._window.on_note_moved)
+        self._notes.folder_added.connect(self._window.on_folder_added)
+        self._notes.folder_renamed.connect(self._window.on_folder_renamed)
+        self._notes.folder_deleted.connect(self._window.on_folder_deleted)
 
         # ── 全局热键 ──
         modifiers, key = self._config.get_hotkey()
@@ -121,15 +130,28 @@ class App:
     def _on_save_content(self, filepath: str, content: str) -> None:
         self._notes.save_content(filepath, content)
 
-    def _on_create_note(self) -> None:
-        name = self._unique_filename("新便签")
-        note = self._notes.create(name)
+    def _on_create_note(self, name: str | None = None, group: str = "") -> None:
+        if not name:
+            name = self._unique_filename("新便签", group)
+        self._notes.create(name, group)
 
     def _on_delete_note(self, filepath: str) -> None:
         self._notes.delete(filepath)
 
     def _on_rename_note(self, old_path: str, new_name: str) -> None:
         self._notes.rename(old_path, new_name)
+
+    def _on_move_note(self, filepath: str, target_group: str) -> None:
+        self._notes.move(filepath, target_group)
+
+    def _on_create_folder(self, rel_path: str) -> None:
+        self._notes.create_folder(rel_path)
+
+    def _on_rename_folder(self, rel_path: str, new_name: str) -> None:
+        self._notes.rename_folder(rel_path, new_name)
+
+    def _on_delete_folder(self, rel_path: str) -> None:
+        self._notes.delete_folder(rel_path)
 
     # ── 设置界面 ───────────────────────────────────────────────
 
@@ -179,12 +201,30 @@ class App:
     def _load_initial_notes(self) -> None:
         for note in self._notes.scan_all():
             self._window.add_tab(note.filepath)
+        # 恢复分组抽屉展开状态，并按分组树重建标签行
+        self._window.set_open_drawers(self._config.get_open_drawers())
+        self._window.rebuild_strip()
 
-    def _unique_filename(self, base: str) -> str:
-        existing = {n.filename for n in self._notes.scan_all()}
+    def _unique_filename(self, base: str, group: str = "") -> str:
+        """在同分组内生成不重名的便签名（跨分组允许同名）。"""
+        tree = self._notes.scan_tree()
+        target = self._find_folder_node(tree, group) if group else tree
+        existing = {n.filename for n in target.notes} if target else set()
         if base not in existing:
             return base
         i = 2
         while f"{base}_{i}" in existing:
             i += 1
         return f"{base}_{i}"
+
+    @staticmethod
+    def _find_folder_node(tree, rel_path: str):
+        if tree is None:
+            return None
+        if tree.rel_path == rel_path:
+            return tree
+        for sub in tree.folders:
+            found = App._find_folder_node(sub, rel_path)
+            if found is not None:
+                return found
+        return None

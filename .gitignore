@@ -26,3 +26,6 @@ notes/*
 !notes/.gitkeep
 !notes/使用指南.md
 开发者指南/深度分析报告.md
+
+# Agent 会话数据（计划、临时状态）
+.zcode/

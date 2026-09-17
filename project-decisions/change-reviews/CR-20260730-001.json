@@ -1,0 +1,26 @@
+{
+  "id": "CR-20260730-001",
+  "request": "决策树代码一致性审查（verify-A1）发现默认快捷键值在三处不一致，需统一",
+  "affected_nodes": ["B3"],
+  "relevant_code": [
+    "config.py:71-75",
+    "project-decisions/decision-tree.json B3 statement"
+  ],
+  "classification": "adjust",
+  "reasoning": "子 Agent 审查 A1 path 时发现三处默认快捷键值不同：决策树写 Ctrl+Shift+A，config.py fallback 写 Ctrl+Shift+N，实际 config.json 存的是 Ctrl+Alt+A。W主理确认统一为 Ctrl+Alt+A，原因是 Ctrl+Shift+A 和 Ctrl+Shift+N 与浏览器快捷键冲突。",
+  "recommended_approach": "以用户实际使用的 config.json 值为准，统一代码 fallback、决策树 statement 和实际配置三处值",
+  "decision_updates": ["B3: statement 默认值修正"],
+  "implementation_plan": [
+    "1. 修改 config.py get_hotkey() 的 modifiers fallback 为 [\"ctrl\", \"alt\"]，key fallback 为 \"a\"",
+    "2. 更新 config.py get_hotkey() 文档字符串示例值",
+    "3. 更新决策树 B3 statement 默认值描述"
+  ],
+  "verification_plan": [
+    "验证 config.py fallback 与 config.json 实际值一致",
+    "验证决策树 B3 statement 与代码默认值一致"
+  ],
+  "user_confirmation_required": false,
+  "outcome": "implemented",
+  "created_at": "2026-07-30T14:58:00+08:00",
+  "updated_at": "2026-07-30T14:58:00+08:00"
+}
