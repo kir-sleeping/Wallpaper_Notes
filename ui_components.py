@@ -632,8 +632,9 @@ class FolderDrawer(QWidget):
     def _bar_target_end(self) -> float:
         """按当前布局算出条右端该在哪。
 
-        静止（未选中子便签）时与胶囊完全平齐——条的左右边缘就是胶囊的
-        左右边缘；选中子便签后延伸到该便签的右缘。条任何时候都不消失。
+        静止（未选中子便签）时右端内缩一个圆角半径（条比胶囊略窄、
+        不悬在圆角外）；选中子便签后延伸到该便签的右缘（子便签是方角，
+        条与之齐平）。条任何时候都不消失。
         """
         name_end = float(self.name_btn.geometry().right() + 1 - self._PILL_RADIUS)
         end = name_end

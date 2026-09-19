@@ -117,7 +117,7 @@ pyinstaller main.py --onefile --noconsole --name Wallpaper_Notes --icon=note_app
 |--------|------|---------|
 | `window` | 窗口外观 | `border_radius` |
 | `tab_bar` | 标签栏样式 | `background_color`, `text_color`, `active_text_color`, `active_indicator_color`, `font_family`, `font_size`, `radius_top`, `padding_h`, `padding_v` |
-| `tab_strip` | 分组抽屉配色 | `folder_pill_color`, `folder_pill_text_color`, `folder_bg_open`(子项底色), `folder_bg`(子项悬停色), `separator_color`(右缘分隔线), `folder_bar_color`, `plus_color`, `fade_width` |
+| `tab_strip` | 分组抽屉配色 | `folder_pill_color`, `folder_pill_text_color`, `separator_color`(右缘分隔线), `folder_bar_color`, `plus_color`, `plus_hover_color`, `fade_width` |
 | `content` | 内容区显示 | `font_family`, `font_size`, `text_color`, `heading_color`, `heading_font_family`, `pane_border_*`, `enable_glass`, `glass_opacity`, `enable_glow`, `enable_frost`, `frost_intensity`, `frost_grain`, `link_color` |
 | `editor` | 编辑模式 | `font_family`, `font_size`, `background_color`, `text_color`, `caret_color`, `padding_h`, `padding_v` |
 | `scrollbar` | 滚动条 | `width`, `handle_color`, `handle_hover_color`, `track_color` |
@@ -130,7 +130,6 @@ pyinstaller main.py --onefile --noconsole --name Wallpaper_Notes --icon=note_app
 | `hotkey.key` | 触发按键 |
 | `behavior.autostart` | 开机自启（推荐通过设置对话框修改） |
 | `window.open_drawers` | 启动时展开的分组抽屉（自动记录，一般无需手动改） |
-| `behavior.notes_dir` | 便签目录名（默认 `notes`） |
 
 ---
 

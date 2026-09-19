@@ -1,10 +1,9 @@
 # Wallpaper_Notes — 产品需求文档
 
-> 版本：v0.2 (MVP)  
+> 版本：v0.1 (MVP)  
 > 创建日期：2026-05-15  
-> 最后更新：2026-05-15（同步代码审查 v0.2）  
-> 状态：已审查
-
+> 状态：已审查（MVP 基线文档）  
+> 📌 **版本说明**：本文为 MVP 需求基线，部分条目未实现或已演进（如 Ctrl+Tab 切换、自动保存间隔、退出确认、新建弹命名框等），当前行为以代码与使用指南为准。  
 ---
 
 ## 1. 产品定位
@@ -53,24 +52,10 @@ Wallpaper_Notes/
 │   ├── 灵感札记.md
 │   └── ...（用户自由增删）
 │
-├── fonts/                  ← 自定义字体目录（.ttf/.otf）
-│                           启动时自动注册到 QFontDatabase
-│
 ├── config.json             ← 功能配置（窗口、快捷键等）
-├── theme.json              ← 样式配置（颜色、字体、透明度、玻璃/发光效果等）
+├── theme.json              ← 样式配置（颜色、字体、透明度等）
 │
 ├── main.py                 ← 主程序入口
-├── app.py                  ← 应用控制器（模块接线与生命周期）
-├── window.py               ← 主窗口（标签栏、双层模式、拖拽缩放）
-├── ui_components.py        ← UI 组件工厂与主题引擎（QSS 生成）
-├── renderer.py             ← Markdown 渲染管道（MD→HTML+CSS）
-├── notes_manager.py        ← 文件系统映射器（CRUD + watchdog 监听）
-├── config.py               ← 配置持久化层（JSON 读写 + 注册表自启）
-├── tray.py                 ← 系统托盘控制器
-├── hotkey.py               ← 全局热键注册器（Windows API）
-├── models.py               ← 数据类（NoteInfo）
-├── settings.py             ← 设置对话框（快捷键 + 全部样式编辑 + 字体管理）
-│
 ├── requirements.txt
 ├── README.md
 └── PRD.md                  ← 本文件
@@ -85,97 +70,69 @@ Wallpaper_Notes/
 | 项目 | 规格 |
 |------|------|
 | 窗口形态 | 单窗口，顶部标签栏切换不同便签 |
-| 窗口层级 | 默认吸附在桌面层（HWND_BOTTOM），不遮挡其他应用窗口；快捷键唤出时置顶（HWND_TOPMOST） |
+| 窗口层级 | 默认吸附在桌面层，不遮挡其他应用窗口 |
 | 窗口大小 | 用户可拖拽边缘自由调节 |
-| 窗口位置 | 首次启动居中；支持拖拽移动（标签栏区域长按拖拽），位置记忆到 config.json |
+| 窗口位置 | 首次启动居中；支持拖拽移动，位置记忆到 config.json |
 | 内容溢出 | 内容自适应窗口宽度，高度超出时显示滚动条 |
 | 窗口装饰 | 无标题栏、无最小化/最大化按钮，保持极简 |
 | 窗口显隐 | 不提供「关闭」按钮；所有窗口操作通过系统托盘 |
-| 鼠标穿透 | 通过 WA_TranslucentBackground + WM_NCHITTEST 拦截实现全区域鼠标事件接收 |
 
 ### 3.2 标签系统（便签管理）
 
 | 项目 | 规格 |
 |------|------|
 | 标签识别 | 启动时扫描 `notes/` 下所有 `.md` 文件，每个文件对应一个标签 |
-| 新建标签 | 标签栏右侧内嵌 `+` 按钮 → 自动创建 `.md` 文件（无命名框） → 自动切换 |
+| 新建标签 | 标签栏右侧 `+` 按钮 → 弹出命名框 → 创建 `.md` 文件 → 自动切换 |
 | 删除标签 | 标签右键菜单 → 确认 → 删除对应 `.md` 文件 |
-| 重命名标签 | 标签右键菜单 → 输入新名称 → 同步重命名 `.md` 文件 |
-| 标签切换 | 点击标签栏切换；支持快捷键 `Ctrl+Tab` / `Ctrl+Shift+Tab`（QTabWidget 内置） |
-| 文件检测 | 运行中持续监听 `notes/` 文件夹变化（新增/删除/修改自动同步，300ms 防抖） |
+| 重命名标签 | 标签右键菜单 → 原地改名 → 同步重命名 `.md` 文件 |
+| 标签切换 | 点击标签栏切换；支持快捷键 `Ctrl+Tab` / `Ctrl+Shift+Tab` |
+| 文件检测 | 运行中持续监听 `notes/` 文件夹变化（新增/删除/修改自动同步） |
 
 ### 3.3 内容编辑
 
 | 项目 | 规格 |
 |------|------|
-| 显示模式 | 渲染 Markdown（自定义解析器），以优雅样式展示内容 |
+| 显示模式 | 渲染 Markdown，以优雅样式展示内容 |
 | 编辑模式 | **原地切换** — 双击便签内容区，同一位置变为编辑框 |
-| 编辑内容 | 编辑模式显示原始 Markdown 文本（等宽字体） |
-| 保存退出 | 按 `Esc` → 自动保存 `.md` 文件 → 切回显示模式 → 窗口回到桌面层 |
-| 自动保存 | 切换标签时自动保存上一个标签的编辑内容 |
-| 三击退出编辑 | 编辑模式下**三击**（2 次双击事件）退出编辑模式返回显示模式 |
-| Enter 进入编辑 | 显示模式下按 `Enter` 也进入编辑模式（等价于双击） |
+| 编辑内容 | 编辑模式显示原始 Markdown 文本 |
+| 保存退出 | 按 `Esc` → 自动保存 `.md` 文件 → 切回显示模式 |
+| 自动保存 | 编辑过程中可定期/防抖自动保存（防止意外丢失） |
 
 ### 3.4 快捷键系统
 
 | 快捷键 | 行为 |
 |--------|------|
-| 全局快捷键（可配置，默认 Ctrl+Shift+N） | 窗口置顶 + 自动进入编辑模式 + 编辑框聚焦 |
+| 全局快捷键（可配置） | 窗口置顶 + 编辑框聚焦 + 自动进入编辑模式 |
 | `Esc` | 保存并退出编辑，窗口回到桌面层 |
 | `Ctrl+Tab` | 切换到下一个标签 |
 | `Ctrl+Shift+Tab` | 切换到上一个标签 |
 
-**实现方式：** 使用 Windows API (`RegisterHotKey`) 注册系统级全局热键，零额外依赖。通过 `QAbstractNativeEventFilter` 捕获 `WM_HOTKEY` 消息。
+**实现方式：** 使用 Windows API (`RegisterHotKey`) 注册系统级全局热键，零额外依赖。
 
 ### 3.5 系统托盘
 
 | 项目 | 规格 |
 |------|------|
 | 托盘图标 | 启动时自动创建系统托盘图标 |
-| 右键菜单 | 包含「显示/隐藏」「进入编辑」「设置」「退出」等操作 |
-| 窗口显隐 | 托盘菜单控制窗口的显示/隐藏；气泡通知 |
-| 进入编辑 | 托盘菜单直接切换到编辑模式（等价于快捷键） |
-| 退出确认 | 退出时清理资源（停止监听、注销热键） |
+| 右键菜单 | 包含「设置」「退出」等操作 |
+| 窗口显隐 | 托盘菜单控制窗口的显示/隐藏，桌面不设任何按钮 |
+| 退出确认 | 退出时确认，防止误操作导致丢失编辑中内容 |
 
 ### 3.6 开机自启
 
 | 项目 | 规格 |
 |------|------|
 | 实现方式 | 写入 Windows 注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
-| 开关位置 | 设置界面中可启用/禁用 |
-| 开发模式 | 使用 `python.exe main.py` 作为自启项；打包后使用 exe 自身路径 |
+| 开关位置 | 设置界面或托盘菜单可选启用/禁用 |
 
-### 3.7 视觉效果
-
-| 项目 | 规格 |
-|------|------|
-| 玻璃效果 | 可选的半透对角渐变背景（configurable `enable_glass` + `glass_opacity`） |
-| 文字发光 | 可选的文字辉光效果（`enable_glow`），基于文字颜色按距离变暗的 box blur |
-| 磨砂质感 | 可选的噪点纹理覆盖层（`enable_frost`），强度与颗粒大小可调 |
-| 内容区边框 | 独立配置的边框颜色、宽度和圆角（`pane_border_color/width/radius`） |
-| 字体管理 | 支持加载 `fonts/` 目录中的 `.ttf`/`.otf` 字体，在设置界面中管理 |
-
-### 3.8 设置界面
-
-| 项目 | 规格 |
-|------|------|
-| 唤起方式 | 系统托盘右键 → 「设置」 |
-| 快捷键设置 | 勾选 `Ctrl`/`Shift`/`Alt`/`Win` + 下拉选主键 |
-| 样式编辑 | 完整的 theme.json 字段编辑（窗口/标签栏/内容区/编辑器/滚动条） |
-| 色盘 | 带 `ColorAlphaWidget` 的颜色选择器（支持 RGBA 透明度） |
-| 实时预览 | Apply 按钮 → 不关闭对话框 → 保存并预览新样式 |
-| 字体管理 | 查看已添加字体 + 添加按钮（文件对话框选择 .ttf/.otf） |
-| 开机自启 | 复选框管理开机自启状态 |
-| 自定义字体 | 自动注册到 QFontDatabase，所有字体选择框可用 |
-
-### 3.9 AI 集成
+### 3.7 AI 集成
 
 | 项目 | 规格 |
 |------|------|
 | 写入方式 | AI Agent 直接写入 `notes/` 下的 `.md` 文件 |
-| 刷新机制 | 文件系统监听自动检测变化并刷新显示（300ms 防抖） |
+| 刷新机制 | 文件系统监听自动检测变化并刷新显示 |
 | 使用场景 | 晨间仪式：Agent 定时写入诗句/文学句子 |
-| 数据安全 | AI 写入和用户编辑同时发生时，后保存者覆盖前保存者（MVP 阶段） |
+| 数据安全 | AI 写入和用户编辑同时发生时，后保存者覆盖前保存者（MVP阶段） |
 
 ---
 
@@ -193,10 +150,12 @@ Wallpaper_Notes/
   },
   "hotkey": {
     "modifiers": ["ctrl", "shift"],
-    "key": "n"
+    "key": "n",
+    "description": "快捷键：唤起便签置顶编辑"
   },
   "behavior": {
-    "autostart": true   // 开机自启
+    "autostart": true,               // 开机自启
+    "auto_save_interval_ms": 3000     // 编辑时自动保存间隔
   }
 }
 ```
@@ -207,9 +166,16 @@ Wallpaper_Notes/
 {
   "window": {
     "background_color": "rgba(255, 255, 255, 0.85)",
-    "border_radius": 12,              // 窗口圆角（通过 setMask 实现）
+    "border_radius": 12,              // 窗口圆角
     "border_color": "rgba(200, 200, 200, 0.5)",
-    "border_width": 1
+    "border_width": 1,
+    "shadow": {
+      "enabled": true,
+      "color": "rgba(0, 0, 0, 0.15)",
+      "blur": 20,
+      "offset_x": 0,
+      "offset_y": 4
+    }
   },
   "tab_bar": {
     "background_color": "rgba(245, 245, 245, 0.9)",
@@ -218,37 +184,23 @@ Wallpaper_Notes/
     "active_indicator_color": "#4A90D9",
     "font_size": 14,
     "font_family": "Microsoft YaHei",
-    "padding_h": 12,
-    "padding_v": 8
+    "height": 36,
+    "padding": "8px 12px"
   },
   "content": {
     "background_color": "transparent",
     "text_color": "#333333",
     "font_size": 16,
     "font_family": "Microsoft YaHei",
-    "heading_color": "#aaddff",              // 标题颜色
-    "heading_font_family": "Microsoft YaHei", // 标题字体（可独立于正文字体）
     "line_height": 1.6,
-    "padding_h": 16,
-    "padding_v": 16,
-    "pane_border_color": "rgba(200,200,200,0.5)",  // 内容区边框色
-    "pane_border_width": 1,                        // 内容区边框宽
-    "pane_border_radius": 4,                       // 内容区下圆角
-    "enable_glass": false,                  // 玻璃效果开关
-    "glass_opacity": 0.10,                   // 玻璃透明度
-    "enable_frost": false,                   // 磨砂质感开关
-    "frost_intensity": 0.20,                 // 磨砂强度
-    "frost_grain": 1,                        // 磨砂颗粒等级（1=小/2=中/3=大）
-    "enable_glow": false                     // 文字发光开关
+    "padding": "16px"
   },
   "editor": {
     "background_color": "#FAFAFA",
     "text_color": "#333333",
     "font_size": 15,
     "font_family": "Cascadia Code, Consolas, monospace",
-    "caret_color": "#4A90D9",
-    "padding_h": 12,
-    "padding_v": 12
+    "caret_color": "#4A90D9"
   },
   "scrollbar": {
     "width": 6,
@@ -272,27 +224,19 @@ Wallpaper_Notes/
 ```
 启动程序
   ↓
-设置 AppUserModelID（修正任务栏图标）
-  ↓
-加载 config.json + theme.json
-  ↓
-同步开机自启注册表状态
-  ↓
-加载 fonts/ 下的自定义字体
-  ↓
-创建窗口（加载初始便签列表）
-  ↓
 创建系统托盘图标
   ↓
-启动文件监听（watchdog PollingObserver）
+读取 config.json / theme.json
   ↓
-显示窗口 + 注册全局热键
+扫描 notes/ 加载 .md 文件生成标签
+  ↓
+窗口居中显示桌面层（渲染第一个标签内容）
 ```
 
 ### 5.2 日常查看
 
 ```
-桌面常态 → 窗口显示在桌面层（HWND_BOTTOM）
+桌面常态 → 窗口显示在桌面层
          → 主动切换到其他标签查看不同便签内容
          → 内容随 AI 写入实时自动刷新
 ```
@@ -304,7 +248,7 @@ Wallpaper_Notes/
   ↓
 按快捷键（如 Ctrl+Shift+N）
   ↓
-窗口置顶（HWND_TOPMOST） + 自动进入编辑模式 + 聚焦到编辑框
+窗口置顶 + 自动进入编辑模式 + 聚焦到编辑框
   ↓
 直接打字编辑（MD格式）
   ↓
@@ -312,7 +256,7 @@ Wallpaper_Notes/
   ↓
 自动保存到对应的 .md 文件
   ↓
-窗口回到桌面层（HWND_BOTTOM），显示渲染后的内容
+窗口回到桌面层，显示渲染后的内容
 ```
 
 ### 5.4 AI 晨间仪式
@@ -332,9 +276,8 @@ Agent 写入 notes/今日诗句.md
 ### 5.5 管理便签
 
 ```
-右键标签 → 重命名 / 删除
-单击 ⊕  → 新建便签
-右键托盘 → 显示/隐藏 / 进入编辑 / 设置 / 退出
+右键标签 → 新建 / 重命名 / 删除
+右键托盘 → 设置 / 退出
 ```
 
 ---
@@ -342,11 +285,11 @@ Agent 写入 notes/今日诗句.md
 ## 6. 非 MVP（后续迭代）
 
 - 每个标签独立的样式配置（不同颜色/字体/透明度的便签）
+- 图形化设置界面
 - 标签切换动画
 - 编辑器语法高亮
 - AI与用户编辑的冲突合并策略
 - 多平台支持（Linux/macOS）
-- 窗口阴影效果（theme.json 中预留了 shadow 字段但未实现）
 
 ---
 
@@ -355,9 +298,9 @@ Agent 写入 notes/今日诗句.md
 | 组件 | 建议 |
 |------|------|
 | UI 框架 | PySide6（Qt for Python） |
-| Markdown 渲染 | 自定义解析器（renderer.py，支持标题/段落/列表/引用/行内格式） |
+| Markdown 渲染 | QTextBrowser 或 mistune+QTextDocument |
 | 文件监听 | watchdog（PollingObserver 兼容 Windows） |
-| 全局快捷键 | Windows API（ctypes + RegisterHotKey + nativeEventFilter） |
+| 全局快捷键 | Windows API（ctypes + RegisterHotKey） |
 | 打包分发 | PyInstaller（--onefile --noconsole） |
 | 开机自启 | Windows 注册表写入 |
 
