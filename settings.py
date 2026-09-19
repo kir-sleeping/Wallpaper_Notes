@@ -502,26 +502,20 @@ class SettingsDialog(QDialog):
         tb = self._theme.get("tab_bar", {})   # 文件夹色的默认值取自标签栏
         g = QGroupBox("分组抽屉")
         gl = QVBoxLayout(g)
-        self._folder_bg = self._add_color_row(
-            gl, "收起底色：", ts.get("folder_bg", "rgba(0,0,0,0.05)"),
+        self._folder_pill = self._add_color_row(
+            gl,
+            "胶囊颜色：",
+            ts.get("folder_pill_color", tb.get("active_indicator_color", "#4A90D9")),
+            with_alpha=False,
         )
-        self._folder_bg_open = self._add_color_row(
-            gl, "展开底色：", ts.get("folder_bg_open", "rgba(0,0,0,0.095)"),
+        self._folder_pill_text = self._add_color_row(
+            gl,
+            "胶囊文字色：",
+            ts.get("folder_pill_text_color", "#ffffff"),
+            with_alpha=False,
         )
         self._folder_sep = self._add_color_row(
-            gl, "分隔线：", ts.get("separator_color", "rgba(0,0,0,0.16)"),
-        )
-        self._folder_text = self._add_color_row(
-            gl,
-            "文件夹文字色：",
-            ts.get("folder_text_color", tb.get("text_color", "#666666")),
-            with_alpha=False,
-        )
-        self._folder_active = self._add_color_row(
-            gl,
-            "文件夹选中色：",
-            ts.get("folder_active_text_color", tb.get("active_text_color", "#333333")),
-            with_alpha=False,
+            gl, "右缘分隔线：", ts.get("separator_color", "rgba(0,0,0,0.16)"),
         )
         self._folder_bar = self._add_color_row(
             gl,
@@ -830,19 +824,17 @@ class SettingsDialog(QDialog):
         theme["tab_bar"]["radius_top"] = self._tab_radius_top.value()
 
         theme.setdefault("tab_strip", {})
-        theme["tab_strip"]["folder_bg"] = self._folder_bg.get_css_color()
-        theme["tab_strip"]["folder_bg_open"] = (
-            self._folder_bg_open.get_css_color()
+        theme["tab_strip"]["folder_pill_color"] = self._folder_pill.get_css_color()
+        theme["tab_strip"]["folder_pill_text_color"] = (
+            self._folder_pill_text.get_css_color()
         )
-        # 悬停色已并入收起/展开两种底色，清掉历史配置里的旧键
-        theme["tab_strip"].pop("folder_bg_hover", None)
-        theme["tab_strip"].pop("folder_bg_open_hover", None)
         theme["tab_strip"]["separator_color"] = self._folder_sep.get_css_color()
-        theme["tab_strip"]["folder_text_color"] = self._folder_text.get_css_color()
-        theme["tab_strip"]["folder_active_text_color"] = (
-            self._folder_active.get_css_color()
-        )
         theme["tab_strip"]["folder_bar_color"] = self._folder_bar.get_css_color()
+        # 文字色已并入胶囊（胶囊文字色）、子项区已无淡底，清理历史键
+        for legacy in ("folder_text_color", "folder_active_text_color",
+                       "folder_bg", "folder_bg_open", "folder_bg_hover",
+                       "folder_bg_open_hover"):
+            theme["tab_strip"].pop(legacy, None)
         theme["tab_strip"]["plus_color"] = self._plus_color.get_css_color()
         theme["tab_strip"]["fade_width"] = self._fade_width.value()
 

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import re
 from html import escape as _esc_attr
+from html import unescape as _html_unescape
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -207,26 +208,71 @@ def _postprocess_for_qt(html: str) -> str:
 
 # ── 图片宽度覆盖 ──────────────────────────────────────────────
 
-# mistune 不认 `{width=N}` 后缀，会把它当普通文本留在 <img> 之后，此处合并回标签
-# 只接受像素值：百分比在 Qt 中会导致布局高度为 0（图片压住后续内容）
-_IMG_WIDTH_SUFFIX_RE = re.compile(r"(<img\b[^>]*>)\s*\{width=([0-9]{1,5})\}")
+# mistune 不认 `{width=N}` 后缀，会把它当普通文本留在 <img> 之后，此处合并回标签。
+# 像素值 → width 属性；百分比 → 按当前可用宽度换算成固定像素的 width 属性
+# （先定尺寸，之后窗口变化不再等比缩放），再由渲染器的 max-width:100% 兜底：
+# 便签窄到放不下时自动压回，不溢出。
+# 注意不能用 width="N%" 属性本身——Qt 会把布局高度算成 0（图片压住后续内容）。
+_IMG_WIDTH_SUFFIX_RE = re.compile(r"(<img\b[^>]*>)\s*\{width=([0-9]{1,3}%|[0-9]{1,5})\}")
 _IMG_WIDTH_ATTR_RE = re.compile(r'\s*width="[^"]*"')
+_IMG_STYLE_ATTR_RE = re.compile(r'\s*style="[^"]*"')
+_IMG_SRC_RE = re.compile(r'src="([^"]*)"')
 
 
-def _apply_image_widths(html: str) -> str:
-    """把图片后的 `{width=N}` 后缀合并为 width 属性（单位：像素）。
+def _apply_image_widths(
+    html: str,
+    content_width: int | None = None,
+    image_size=None,
+) -> str:
+    """把图片后的 `{width=N}` / `{width=N%}` 后缀合并进 <img> 标签。
 
-    渲染器附加的 max-width:100% 会保留——因此显式宽度大于便签宽度时
-    会被压回容器内，仍不会溢出。非法值（如 {width=abc}、{width=50%}）
-    不匹配，原样留作文字，不影响其它内容。
+    像素：width="N"（精确尺寸），渲染器的 max-width:100% 保留作容器兜底。
+    百分比：按 content_width 换算成**固定像素**——先定尺寸，此后窗口缩放不再
+    等比变化；便签窄到放不下时由 max-width:100% 压回。若提供 image_size
+    （原图尺寸探测函数），宽度还会卡在原图宽度以内（不放大）。
+    拿不到 content_width（控件尚未布局）时退回 style="max-width:N%" 占位，
+    待重渲染时再定成固定尺寸。
+    非法值（{width=0%}、{width=101%}、{width=abc}）不生效，原样留作文字。
     """
 
+    def _strip_tail(tag: str) -> str:
+        tag = tag[:-1].rstrip()          # 去掉结尾 '>'
+        return tag[:-1].rstrip() if tag.endswith("/") else tag
+
+    def _natural_width(tag: str) -> int | None:
+        """探测原图宽度；失败返回 None（此时不做不放大限制）。"""
+        if image_size is None:
+            return None
+        m = _IMG_SRC_RE.search(tag)
+        if not m:
+            return None
+        try:
+            size = image_size(_html_unescape(m.group(1)))
+        except Exception:
+            return None
+        if size and len(size) == 2 and size[0] > 0:
+            return int(size[0])
+        return None
+
     def _merge(m: re.Match) -> str:
-        tag = _IMG_WIDTH_ATTR_RE.sub("", m.group(1))  # 去掉默认 width="100%"
-        tag = tag[:-1].rstrip()                       # 去掉结尾 '>'
-        if tag.endswith("/"):
-            tag = tag[:-1].rstrip()
-        return f'{tag} width="{m.group(2)}" />'
+        value = m.group(2)
+        tag = m.group(1)
+        if value.endswith("%"):
+            pct = int(value[:-1])
+            if not 1 <= pct <= 100:
+                return m.group(0)        # 越界：原样保留为文字
+            if not (content_width and content_width > 0):
+                tag = _IMG_STYLE_ATTR_RE.sub("", tag)
+                return _strip_tail(tag) + f' style="max-width:{pct}%" />'
+            tag = _IMG_WIDTH_ATTR_RE.sub("", tag)
+            px = max(1, round(content_width * pct / 100))
+            natural = _natural_width(tag)
+            if natural is not None:
+                px = min(px, natural)    # 不放大
+            # style="max-width:100%" 保留：容器更窄时压回，不溢出
+            return _strip_tail(tag) + f' width="{px}" />'
+        tag = _IMG_WIDTH_ATTR_RE.sub("", tag)   # 防御：清掉已有 width
+        return _strip_tail(tag) + f' width="{value}" />'
 
     return _IMG_WIDTH_SUFFIX_RE.sub(_merge, html)
 
@@ -244,8 +290,9 @@ class _QtHtmlRenderer(mistune.HTMLRenderer):
        均保持 200px），且随窗口缩放自动重排，无需重新渲染 HTML。
        注意：不能用 width="100%"/"50%" 这类百分比——Qt 对百分比宽度会算出
        0 布局高度，图片会压住后续内容（实测确认）。
-    3. 单图可用 `{width=N}`（像素）覆盖默认值，见 _apply_image_widths。
-       不支持百分比：同上，Qt 的百分比宽度布局有缺陷。
+    3. 单图可用 `{width=N}`（像素）或 `{width=N%}`（占便签宽的比例上限）
+       覆盖默认值，见 _apply_image_widths。百分比必须走 max-width：
+       width="N%" 属性会让 Qt 的布局高度塌陷为 0（实测确认）。
     """
 
     def __init__(self, base_dir: str | None = None) -> None:
@@ -282,15 +329,21 @@ def render(
     md_text: str,
     theme: dict[str, Any],
     base_dir: str | Path | None = None,
+    content_width: int | None = None,
+    image_size=None,
 ) -> str:
     """将 Markdown 文本转换为完整 HTML（含内联 CSS），供 QTextBrowser 显示。
 
     base_dir：便签文件所在目录，用于解析 ![图片](相对路径)。
     不传时相对路径图片无法显示（QTextBrowser 缺 baseUrl）。
+    content_width：正文可用文字宽度（像素），用于把 `{width=N%}` 定成固定像素尺寸。
+    image_size：可选的原图尺寸探测函数 (url) -> (w, h) | None，用于避免把图放大。
     """
     css = build_css(theme)
     md = _create_markdown(str(base_dir) if base_dir else None)
-    body = _postprocess_for_qt(_apply_image_widths(md(_ensure_table_breaks(md_text))))
+    body = _postprocess_for_qt(
+        _apply_image_widths(md(_ensure_table_breaks(md_text)), content_width, image_size)
+    )
     return f"""<html><head><meta charset="utf-8"><style>{css}</style></head><body>{body}</body></html>"""
 
 

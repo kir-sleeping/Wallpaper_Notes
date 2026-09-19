@@ -276,16 +276,11 @@ def generate_strip_qss(theme: dict[str, Any]) -> str:
     active_color = _s(tb, "active_text_color", "#333333")
     indicator = _s(tb, "active_indicator_color", "#4A90D9")
 
-    # 底色只分「收起 / 展开」两种；悬停不再单独配色（老配置里的 hover 键忽略）
-    folder_bg = _s(ts, "folder_bg", "rgba(0,0,0,0.05)")
-    folder_bg_open = _s(ts, "folder_bg_open", "rgba(0,0,0,0.095)")
-    folder_radius = _s(ts, "folder_radius", "3px 10px 10px 3px")
+    # 文件夹实心胶囊：底色由 paintEvent 绘制（见 FolderDrawer），QSS 只管文字色
+    pill_text = _qcolor(ts.get("folder_pill_text_color", "#ffffff"))
     sep_color = _s(ts, "separator_color", "rgba(0,0,0,0.16)")
     plus_color = _s(ts, "plus_color", "rgba(0,0,0,0.30)")
     plus_hover = _s(ts, "plus_hover_color", "#000000")
-    # 文件夹文字色可独立于便签配置，未设置时沿用标签栏文字色
-    folder_text = _s(ts, "folder_text_color", text_color)
-    folder_active = _s(ts, "folder_active_text_color", active_color)
 
     return f"""
 QWidget#noteStrip {{
@@ -308,26 +303,14 @@ QPushButton#noteChip[active="true"] {{
     color: {active_color};
 }}
 QPushButton#folderNameChip {{
+    /* 胶囊底色由 FolderDrawer.paintEvent 绘制（QSS border-radius 在此环境
+       被忽略，只能 QPainter 画）；这里只管文字颜色与内边距 */
     background: transparent;
-    color: {folder_text};
+    color: {pill_text.name(QColor.NameFormat.HexArgb)};
     border: none;
-    /* 与便签 chip 一样预留 2px 下边框：盒子高度一致，文字才能与便签名对齐 */
     border-bottom: 2px solid transparent;
-    border-radius: 4px;
-    padding: 5px 7px;
-}}
-QPushButton#folderNameChip:hover {{
-    color: {folder_active};
-}}
-QWidget#folderDrawer {{
-    background: {folder_bg};
-    border-radius: {folder_radius};
-}}
-QWidget#folderDrawer[open="true"] {{
-    background: {folder_bg_open};
-}}
-QWidget#folderDrawer[open="true"] > QPushButton#folderNameChip {{
-    color: {folder_active};
+    border-radius: 999px;
+    padding: 0px 8px;
 }}
 QWidget#folderSep {{
     background: {sep_color};
@@ -364,6 +347,18 @@ def _lerp_color(a: QColor, b: QColor, t: float) -> QColor:
         round(a.blue() + (b.blue() - a.blue()) * t),
         round(a.alpha() + (b.alpha() - a.alpha()) * t),
     )
+
+
+def _luminance(c: QColor) -> float:
+    """感知亮度（0~255），用于胶囊文字的对比色判断。"""
+    return 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+
+
+def _pill_hover_color(c: QColor) -> QColor:
+    """胶囊悬停色：亮色微暗、深色微亮（各 8%），保持同色系。"""
+    t = 0.08 if _luminance(c) > 128 else -0.08
+    white, black = QColor(255, 255, 255), QColor(0, 0, 0)
+    return _lerp_color(white if t < 0 else black, c, 1.0 - abs(t))
 
 
 _CSS_COLOR_RE = re.compile(
@@ -539,12 +534,9 @@ class FolderDrawer(QWidget):
 
     # 顶部指示条
     _BAR_H = 2                 # 条高
-    _BAR_INSET = 9             # 左右内缩＝文件夹名文字到胶囊边缘的距离（对齐文字）
-    _BAR_TOP_MAX = 7           # 期望离胶囊顶边 7px
-    _BAR_TEXT_GAP = 2          # 与文件夹名文字至少留 2px（胶囊不够高时自动上移）
+    _PILL_RADIUS = 5           # 胶囊圆角半径（适度小圆角，非全圆）
     _BAR_EASE_TAU_MS = 70      # 缓动时间常数（越大越慢）
     _BAR_TICK_MS = 16          # 缓动帧间隔
-    _BAR_IDLE_ALPHA = 0.55     # 未选中子便签时的透明度（选中后变实）
 
     def __init__(
         self, rel_path: str, name: str, strip: "NoteStrip",
@@ -562,13 +554,16 @@ class FolderDrawer(QWidget):
         self._hover_open_pending = False
         self._hover_opened = False
 
-        # 顶部指示条：未选中子便签时只盖住文件夹名，选中后延伸到该子便签。
+        # 顶部指示条：静止时与胶囊平齐，选中子便签后延伸到它。
         # 缓动作用在「右端位置」上（每帧按当前布局重算目标），因此同组内换
         # 子便签、抽屉拉开过程中条都能平滑跟随，而不是跳过去。
         self._bar_color = QColor("#4A90D9")
         self._bar_end = -1.0        # 当前右端（抽屉坐标）；<0 表示尚未初始化
-        self._bar_ext = 0.0         # 0=仅盖住组名，1=已延伸到子便签（控制透明度）
         self._active_chip: QWidget | None = None
+        # 胶囊底色（paintEvent 绘制；QSS border-radius 在此环境被忽略）
+        self._pill_color = QColor("#4A90D9")
+        self._pill_hover = QColor("#4A90D9")
+        self._pill_hovered = False
         self._bar_timer = QTimer(self)
         self._bar_timer.setInterval(self._BAR_TICK_MS)
         self._bar_timer.timeout.connect(self._bar_tick)
@@ -592,19 +587,20 @@ class FolderDrawer(QWidget):
 
         self.name_btn = QPushButton(name)
         self.name_btn.setObjectName("folderNameChip")
+        self.name_btn.installEventFilter(self)   # 悬停变色用
         self.name_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.name_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.name_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         lay.addWidget(self.name_btn)
 
+        self._host = _ClipBox(self)
+        lay.addWidget(self._host)
+
+        # 右缘分隔线：收起时紧跟胶囊，展开时随子项被推到最右侧
         self._sep = QWidget()
         self._sep.setObjectName("folderSep")
         self._sep.setFixedSize(1, 14)
-        self._sep.setVisible(False)  # 分隔线仅在展开时出现（收起态就是一颗名字胶囊）
         lay.addWidget(self._sep)
-
-        self._host = _ClipBox(self)
-        lay.addWidget(self._host)
 
     # ── 子项构建（由 NoteStrip.rebuild 填充）──
 
@@ -617,39 +613,38 @@ class FolderDrawer(QWidget):
         self._bar_color = QColor(color)
         self.update()
 
+    def set_pill_colors(self, color: QColor, hover: QColor) -> None:
+        self._pill_color = QColor(color)
+        self._pill_hover = QColor(hover)
+        self.update()
+
     def set_active_chip(self, chip: QWidget | None) -> None:
         """告知「选中的子便签是否在本抽屉内」，据此延伸或收回顶部条。"""
         self._active_chip = chip
         self._update_bar_target()
 
     def _bar_top(self) -> float:
-        """条的垂直位置：尽量取 _BAR_TOP_MAX，但保证不贴到文件夹名文字。"""
-        fm = self.name_btn.fontMetrics()
-        text_top = self.name_btn.y() + (self.name_btn.height() - fm.height()) / 2.0
-        return float(
-            min(self._BAR_TOP_MAX, max(1.0, text_top - self._BAR_H - self._BAR_TEXT_GAP))
-        )
+        """条的垂直位置：胶囊顶边再下移 1px（条完全落在胶囊的顶边带内，
+        与胶囊同色融合为一体；延伸段看起来像胶囊顶边线继续长出去）。"""
+        return float(self.name_btn.y() - self._BAR_H + 2)
 
     def _bar_target_end(self) -> float:
-        """按当前布局算出条右端该在哪（未选中子便签时＝盖住组名文字）。
+        """按当前布局算出条右端该在哪。
 
-        两端都按 _BAR_INSET 内缩：左端与文件夹名文字左缘对齐，右端与选中
-        子便签的文字右缘对齐，看上去和文字的边距一致。
+        静止（未选中子便签）时与胶囊完全平齐——条的左右边缘就是胶囊的
+        左右边缘；选中子便签后延伸到该便签的右缘。条任何时候都不消失。
         """
-        name_end = float(self.name_btn.geometry().right() + 1 - self._BAR_INSET)
+        name_end = float(self.name_btn.geometry().right() + 1 - self._PILL_RADIUS)
         end = name_end
         if self._active_chip is not None and self._open:
             chip = self._active_chip
-            end = float(
-                chip.mapTo(self, QPoint(0, 0)).x() + chip.width() - self._BAR_INSET
-            )
-        return min(max(end, name_end), float(self.width() - self._BAR_INSET))
+            end = float(chip.mapTo(self, QPoint(0, 0)).x() + chip.width() + 1)
+        return max(end, name_end)
 
     def _update_bar_target(self) -> None:
         """状态变化（选中/展开收起）后启动缓动。"""
         if self._bar_end < 0.0:                 # 首次：直接就位，不做动画
             self._bar_end = self._bar_target_end()
-            self._bar_ext = 1.0 if (self._active_chip is not None and self._open) else 0.0
             self.update()
             return
         self._bar_last_ms = time.monotonic() * 1000.0
@@ -661,29 +656,32 @@ class FolderDrawer(QWidget):
         dt = max(1.0, now - self._bar_last_ms)
         self._bar_last_ms = now
         target_end = self._bar_target_end()
-        target_ext = 1.0 if (self._active_chip is not None and self._open) else 0.0
         # 指数缓出：每帧走掉剩余距离的一定比例（与帧率无关），越接近越慢
         k = 1.0 - math.exp(-dt / self._BAR_EASE_TAU_MS)
         self._bar_end += (target_end - self._bar_end) * k
-        self._bar_ext += (target_ext - self._bar_ext) * k
-        if abs(target_end - self._bar_end) < 0.4 and abs(target_ext - self._bar_ext) < 0.01:
+        if abs(target_end - self._bar_end) < 0.4:
             self._bar_end = target_end
-            self._bar_ext = target_ext
             self._bar_timer.stop()
         self.update()
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
-        super().paintEvent(event)          # 胶囊底色由 QSS 画
+        # 胶囊底：QPainter 画（QSS border-radius 被忽略），悬停时换悬停色
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._pill_hover if self._pill_hovered else self._pill_color)
+        g = self.name_btn.geometry()
+        painter.drawRoundedRect(QRectF(g), self._PILL_RADIUS, self._PILL_RADIUS)
+        painter.end()
+        super().paintEvent(event)          # 顶条在其上、子控件文字在其上
         if self._bar_color.alpha() == 0:
             return
-        x0 = float(self._BAR_INSET)
+        # 左端内缩一个圆角半径：不悬在胶囊的圆角之外
+        x0 = float(self.name_btn.x() + self._PILL_RADIUS)
         end = self._bar_target_end() if self._bar_end < 0.0 else self._bar_end
         if end <= x0 + 2:
             return
-        color = QColor(self._bar_color)
-        color.setAlphaF(self._bar_color.alphaF() * (
-            self._BAR_IDLE_ALPHA + (1.0 - self._BAR_IDLE_ALPHA) * min(1.0, max(0.0, self._bar_ext))
-        ))
+        color = QColor(self._bar_color)          # 恒定全色：未选中也不消失
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -709,10 +707,7 @@ class FolderDrawer(QWidget):
             self._leave_timer.stop()
         self.setProperty("open", open_)
         _repolish(self)
-        self.name_btn.setProperty("open", open_)
-        self._sep.setVisible(open_)
-        # 收起态 = 纯名字胶囊（无间距），展开态才引入 间距|分隔线|间距
-        self._lay.setSpacing(3 if open_ else 0)
+        self._lay.setSpacing(4)   # 胶囊 | 子便签 | 分隔线 之间恒定小间距
 
         if self._anim is not None:
             self._anim.stop()
@@ -800,6 +795,19 @@ class FolderDrawer(QWidget):
         self.updateGeometry()
 
     # ── 悬浮拉出 ──
+
+    def eventFilter(self, obj: QObject, event) -> bool:  # type: ignore[override]
+        from PySide6.QtCore import QEvent
+        if obj is self.name_btn and event.type() in (
+            QEvent.Type.Enter, QEvent.Type.HoverEnter,
+            QEvent.Type.Leave, QEvent.Type.HoverLeave,
+        ):
+            hovered = event.type() in (QEvent.Type.Enter, QEvent.Type.HoverEnter)
+            if self._pill_hovered != hovered:
+                self._pill_hovered = hovered
+                self.update()
+            return False
+        return super().eventFilter(obj, event)
 
     def enterEvent(self, event) -> None:  # type: ignore[override]
         self._leave_timer.stop()  # 回来了：撤销待收起
@@ -1040,12 +1048,12 @@ class NoteStrip(QWidget):
         self._apply_fonts()
         self._apply_bar_colors()
 
-    def _bar_colors(self) -> tuple[QColor, QColor, QColor]:
-        """指示条配色：(便签未选中, 便签选中, 文件夹条)。
+    def _bar_colors(self) -> tuple[QColor, QColor, QColor, QColor, QColor]:
+        """指示条配色：(便签未选中, 便签选中, 文件夹条, 胶囊色, 胶囊悬停色)。
 
-        便签选中＝主题的指示色（沿用，不另设颜色）；未选中＝文字色淡化成的灰条，
-        随主题文字色自适应深浅（可用 tab_strip.bar_idle_color 单独指定）；
-        文件夹条默认同指示色，可用 tab_strip.folder_bar_color 单独指定。
+        便签选中＝主题的指示色；未选中＝文字色淡化成的灰条（可用
+        tab_strip.bar_idle_color 单独指定）；文件夹条与胶囊默认同指示色
+        （分别可用 folder_bar_color / folder_pill_color 单独指定）。
         """
         tb = self._theme.get("tab_bar", {})
         ts = self._theme.get("tab_strip", {})
@@ -1057,14 +1065,17 @@ class NoteStrip(QWidget):
             idle.setAlphaF(0.40)
         active = _qcolor(_s(tb, "active_indicator_color", "#4A90D9"))
         folder_bar = _qcolor(ts.get("folder_bar_color", _s(tb, "active_indicator_color", "#4A90D9")))
-        return idle, active, folder_bar
+        pill = _qcolor(ts.get("folder_pill_color", _s(tb, "active_indicator_color", "#4A90D9")))
+        pill_hover = _pill_hover_color(pill)
+        return idle, active, folder_bar, pill, pill_hover
 
     def _apply_bar_colors(self) -> None:
-        idle, active, folder_bar = self._bar_colors()
+        idle, active, folder_bar, pill, pill_hover = self._bar_colors()
         for chip in self._chips.values():
             chip.set_bar_colors(idle, active)
         for drawer in self._drawers.values():
             drawer.set_bar_color(folder_bar)
+            drawer.set_pill_colors(pill, pill_hover)
 
     def _apply_fonts(self) -> None:
         tb = self._theme.get("tab_bar", {})
@@ -1074,6 +1085,9 @@ class NoteStrip(QWidget):
             chip.setFont(QFont(family, size))
         for drawer in self._drawers.values():
             drawer.name_btn.setFont(QFont(family, size))
+            # 胶囊高度 = 文字高 + 3px（只比文字高 3px）；QSS 竖直 padding 为 0
+            fm = drawer.name_btn.fontMetrics()
+            drawer.name_btn.setFixedHeight(fm.height() + 3)
         if hasattr(self, "_plus") and self._plus is not None:
             self._plus.setFont(QFont(family, size + 1))
 
@@ -1103,7 +1117,7 @@ class NoteStrip(QWidget):
 
     def _build_level(self, node: Any, lay: QHBoxLayout) -> None:
         for info in node.notes:
-            idle, active, _folder_bar = self._bar_colors()
+            idle, active, _folder_bar, _pill, _pill_hover = self._bar_colors()
             chip = NoteChip(info.filepath, info.filename, idle, active)
             chip.setFont(QFont(self._strip_font_family(), self._strip_font_size()))
             chip.clicked.connect(
@@ -1124,7 +1138,9 @@ class NoteStrip(QWidget):
 
     def _make_drawer(self, node: Any) -> FolderDrawer:
         drawer = FolderDrawer(node.rel_path, node.name, self)
-        drawer.set_bar_color(self._bar_colors()[2])
+        _i, _a, _f, pill, pill_hover = self._bar_colors()
+        drawer.set_pill_colors(pill, pill_hover)
+        drawer.set_bar_color(_f)
         drawer.name_btn.clicked.connect(
             lambda checked=False, rel=node.rel_path: self.toggle_drawer(rel)
         )
@@ -1141,7 +1157,7 @@ class NoteStrip(QWidget):
         drawer.filter_wheel_with(self)          # 抽屉内部不留滚轮盲区
 
         for info in node.notes:
-            idle, active, _folder_bar = self._bar_colors()
+            idle, active, _folder_bar, _pill, _pill_hover = self._bar_colors()
             chip = NoteChip(info.filepath, info.filename, idle, active)
             chip.clicked.connect(
                 lambda checked=False, fp=info.filepath: self._on_chip_clicked(fp)

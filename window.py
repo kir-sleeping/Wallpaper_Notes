@@ -25,13 +25,15 @@ from __future__ import annotations
 
 import ctypes
 import random
+import re
 from ctypes import wintypes
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QAction,
+    QImageReader,
     QColor,
     QIcon,
     QImage,
@@ -343,6 +345,13 @@ class WallpaperWindow(QWidget):
         # 分组抽屉展开状态（window 是状态源并负责持久化）
         self._open_drawers: list[str] = []
 
+        # 百分比尺寸图片：登记含百分比的便签 + 尺寸基准（每个便签只定一次）
+        self._percent_notes: set[str] = set()
+        self._bake_width: dict[str, int] = {}
+        self._bake_timer = QTimer(self)
+        self._bake_timer.setSingleShot(True)
+        self._bake_timer.timeout.connect(self._bake_percent_images)
+
         # 窗口属性
         self.setWindowTitle("Wallpaper_Notes")
         self.setObjectName("WallpaperWindow")
@@ -419,6 +428,8 @@ class WallpaperWindow(QWidget):
         if group:
             self._strip.reveal_note(fp, group)
         self._strip.set_active(fp)
+        if fp in self._percent_notes and fp not in self._bake_width:
+            self._bake_timer.start(self._BAKE_DELAY_MS)
 
     def _save_previous_if_editing(self) -> None:
         """切换前保存上一页的编辑内容（如在编辑模式）。"""
@@ -437,7 +448,10 @@ class WallpaperWindow(QWidget):
         if save_cb:
             save_cb(prev_fp, content)
         viewer: QTextBrowser = page.widget(0)
-        viewer.setHtml(render(content, self._theme, base_dir=Path(prev_fp).parent))
+        viewer.setHtml(render(content, self._theme, base_dir=Path(prev_fp).parent,
+                              content_width=self._percent_content_width(prev_fp, viewer),
+                              image_size=self._probe_image_size))
+        self._note_uses_percent_images(prev_fp, content)
         page.setCurrentIndex(0)
         self._set_scroll_pct(viewer, scroll_pct)
 
@@ -458,7 +472,10 @@ class WallpaperWindow(QWidget):
         viewer: QTextBrowser = page.widget(0)
         scroll_pct = self._get_scroll_pct(viewer)
         content = self._read_file(fp)
-        viewer.setHtml(render(content, self._theme, base_dir=Path(fp).parent))
+        viewer.setHtml(render(content, self._theme, base_dir=Path(fp).parent,
+                              content_width=self._percent_content_width(fp, viewer),
+                              image_size=self._probe_image_size))
+        self._note_uses_percent_images(fp, content)
         self._set_scroll_pct(viewer, scroll_pct)
 
     def bring_to_front_and_edit(self) -> None:
@@ -625,7 +642,10 @@ class WallpaperWindow(QWidget):
             filepath = self._fp_by_page.get(id(stack), "")
             if filepath:
                 content = self._read_file(filepath)
-                viewer.setHtml(render(content, theme, base_dir=Path(filepath).parent))
+                viewer.setHtml(render(content, theme, base_dir=Path(filepath).parent,
+                                      content_width=self._percent_content_width(filepath, viewer),
+                                      image_size=self._probe_image_size))
+                self._note_uses_percent_images(filepath, content)
             # 磨砂质感覆盖层（独立更新）
             noise_id = id(stack)
             enable_frost = ct.get("enable_frost", False)
@@ -713,7 +733,10 @@ class WallpaperWindow(QWidget):
         viewer.setFrameShape(QTextBrowser.Shape.NoFrame)
         viewer.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         viewer.setStyleSheet(generate_content_qss(self._theme, final_br))
-        viewer.setHtml(render(content, self._theme, base_dir=Path(filepath).parent))
+        viewer.setHtml(render(content, self._theme, base_dir=Path(filepath).parent,
+                              content_width=self._percent_content_width(filepath, viewer),
+                              image_size=self._probe_image_size))
+        self._note_uses_percent_images(filepath, content)
         viewer.viewport().setAutoFillBackground(False)  # 透出 QStackedWidget 边框
         # 文字辉光（基于文字自身颜色，按距离变暗）
         if ct.get("enable_glow", False):
@@ -785,6 +808,82 @@ class WallpaperWindow(QWidget):
         """窗口大小改变时更新圆角遮罩。"""
         super().resizeEvent(event)
         self._update_mask()
+
+    def showEvent(self, event) -> None:
+        """首次显示、布局定稿后，把百分比尺寸定成固定像素。"""
+        super().showEvent(event)
+        self._bake_timer.start(self._BAKE_DELAY_MS)
+
+    # ── 百分比尺寸图片：先定尺寸、放不下才缩 ────────────────────
+
+    _BAKE_DELAY_MS = 250
+    # 只认「图片后紧跟百分比尺寸」的真实用法，避免正文里提到 {width=48%} 也被登记
+    _PERCENT_IMG_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)\s*\{width=\d{1,3}%\}")
+
+    @staticmethod
+    def _content_text_width(viewer: QTextBrowser) -> int | None:
+        """便签正文的可用文字宽度（像素）。
+
+        = 视口宽 − 2×文档边距（QSS 的 padding 已体现在视口宽里）。
+        控件尚未布局（宽度不足）时返回 None。
+        """
+        vp = viewer.viewport().width()
+        if vp < 40:
+            return None
+        return max(0, vp - 2 * round(viewer.document().documentMargin()))
+
+    @staticmethod
+    def _probe_image_size(url: str):
+        """原图尺寸探测（`{width=N%}` 用，避免把小图放大）。失败返回 None。"""
+        path = QUrl(url).toLocalFile() if url.startswith("file:") else url
+        try:
+            size = QImageReader(path).size()
+        except Exception:
+            return None
+        return (size.width(), size.height()) if size.isValid() else None
+
+    def _percent_content_width(self, filepath: str, viewer: QTextBrowser) -> int | None:
+        """百分比尺寸的基准宽度——**每个便签只定一次**。
+
+        首次拿到真实可用宽度时记下来，之后窗口怎么变都沿用（先定尺寸）；
+        便签窄到放不下时由图片自身的 max-width:100% 压回。
+        """
+        cached = self._bake_width.get(filepath)
+        if cached:
+            return cached
+        live = self._content_text_width(viewer)
+        if live:
+            self._bake_width[filepath] = live
+        return live
+
+    def _note_uses_percent_images(self, filepath: str, content: str) -> None:
+        """登记含百分比尺寸图片的便签（只有这些需要定尺寸）。"""
+        if self._PERCENT_IMG_RE.search(content):
+            self._percent_notes.add(filepath)
+            if filepath not in self._bake_width:
+                self._bake_timer.start(self._BAKE_DELAY_MS)
+            return
+        self._percent_notes.discard(filepath)
+        self._bake_width.pop(filepath, None)
+
+    def _bake_percent_images(self) -> None:
+        """给「还没定尺寸」的百分比便签补一次渲染（布局完成后执行一次）。"""
+        for fp in list(self._percent_notes):
+            if fp in self._bake_width:
+                continue
+            stack = self._pages.get(fp)
+            if stack is None or stack.currentIndex() == 1:
+                continue
+            viewer: QTextBrowser = stack.widget(0)
+            width = self._content_text_width(viewer)
+            if not width:
+                continue                       # 布局还没定稿，等下次
+            scroll_pct = self._get_scroll_pct(viewer)
+            viewer.setHtml(render(self._read_file(fp), self._theme,
+                                  base_dir=Path(fp).parent, content_width=width,
+                                  image_size=self._probe_image_size))
+            self._set_scroll_pct(viewer, scroll_pct)
+            self._bake_width[fp] = width
 
     def _set_desktop_layer(self) -> None:
         """窗口回到桌面层（压到所有普通窗口下面）。"""
@@ -890,7 +989,10 @@ class WallpaperWindow(QWidget):
 
         # 刷新显示（会重置滚动位置）
         viewer: QTextBrowser = stack.widget(0)
-        viewer.setHtml(render(content, self._theme, base_dir=Path(fp).parent))
+        viewer.setHtml(render(content, self._theme, base_dir=Path(fp).parent,
+                              content_width=self._percent_content_width(fp, viewer),
+                              image_size=self._probe_image_size))
+        self._note_uses_percent_images(fp, content)
         stack.setCurrentIndex(0)
         self._set_scroll_pct(viewer, scroll_pct)
 
@@ -905,7 +1007,10 @@ class WallpaperWindow(QWidget):
         if fp:
             content = self._read_file(fp)
             viewer: QTextBrowser = stack.widget(0)
-            viewer.setHtml(render(content, self._theme, base_dir=Path(fp).parent))
+            viewer.setHtml(render(content, self._theme, base_dir=Path(fp).parent,
+                                  content_width=self._percent_content_width(fp, viewer),
+                                  image_size=self._probe_image_size))
+            self._note_uses_percent_images(fp, content)
 
     # ── _just_saved 标记管理（防 watchdog 回刷）────────────────
 
