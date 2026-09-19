@@ -62,7 +62,7 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/kmom-ux/Wallpaper_Notes.git
+git clone https://github.com/kir-sleeping/Wallpaper_Notes.git
 cd Wallpaper_Notes
 
 # 2. 安装依赖
