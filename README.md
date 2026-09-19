@@ -12,13 +12,13 @@
 
 ## ✨ 功能
 
-**🖼️ 桌面原生显示** — 窗口吸附在桌面层（HWND_BOTTOM），自动隐藏 Alt+Tab，不挡应用
+**🖼️ 桌面原生显示** — 窗口吸附在桌面层（HWND_BOTTOM），不挡应用
 
 **📑 多便签 + 标签切换** — 一个标签 = 一个 `.md` 文件，直观的标签栏管理
 
 **🖱️ 极低编辑摩擦** — 双击进入编辑模式，双击保存退出；Ctrl+Alt+A 一键唤出（快捷键可在设置中修改）**Esc**在编辑模式时点击Esc，界面自动退回到桌面
 
-**📝 Markdown 渲染** — 实时预览渲染效果：标题（无需空行分隔）、有序/无序/任务列表（可嵌套）、引用、围栏代码块、表格、分隔线、链接（可点击）、删除线、图片、行内样式全支持
+**📝 Markdown 渲染** — 实时预览渲染效果：标题（无需空行分隔）、有序/无序/任务列表（可嵌套）、引用、围栏代码块、表格、分隔线、链接（可点击）、删除线、图片（支持 `{width=300}` / `{width=50%}` 尺寸与多图并排）、行内样式全支持
 
 **🎨 高度可定制** — 窗口样式、字体、颜色、透明度、圆角、边框……所有视觉效果均可通过托盘设置的对话框实时调整，所见即所得
 
@@ -38,6 +38,12 @@
 ![](screenshots/wallpaper-overview.png)
 ![](screenshots/wallpaper-overview2.png)
 *桌面全貌——便签直接贴在壁纸上，不挡应用窗口，融入桌面环境*
+
+---
+
+![](screenshots/wallpaper-overview4.png)
+![](screenshots/wallpaper-overview5.png)
+*图片支持——桌面随意装饰*
 
 ---
 
@@ -87,7 +93,8 @@ pyinstaller main.py --onefile --noconsole --name Wallpaper_Notes --icon=note_app
 | 切换便签 | 点击便签名；或在标签行上滚动滚轮（上滚上一张、下滚下一张；切到被裁掉的便签时标签行会自动滑过去显示） |
 | 删除 / 重命名便签 | 右键便签名 → 删除 / 重命名 |
 | 移动便签到分组 | 右键便签名 → 移动到… |
-| 分组（文件夹） | 右键分组名 → 新建便签 / 新建子文件夹 / 重命名 / 删除 |
+| 新建文件夹 | 右键标签行右端 `+` / 右键标签行空白处 → 新建文件夹 |
+| 分组（文件夹） | 右键分组名 → 新建便签 / 新建子文件夹 / 重命名 / 删除；悬停分组名 0.3 秒自动展开，子便签不套底色、由实心胶囊标识 |
 | 横向滚动标签行 | `Shift` + 在标签行上滚动滚轮 |
 | 唤出窗口 | 默认快捷键 `Ctrl+Alt+A`（可在设置中修改） |
 | 设置 | 右键托盘图标 → 设置 |
@@ -108,10 +115,11 @@ pyinstaller main.py --onefile --noconsole --name Wallpaper_Notes --icon=note_app
 
 | 配置节 | 说明 | 关键字段 |
 |--------|------|---------|
-| `window` | 窗口外观 | `background_color`, `border_radius`, `border_width`, `border_color` |
-| `tab_bar` | 标签栏样式 | `background_color`, `text_color`, `font_family`, `font_size`, `height` |
-| `content` | 内容区显示 | `font_family`, `font_size`, `text_color`, `heading_color`, `heading_font_family`, `pane_border_*`, `enable_glass`, `enable_glow` |
-| `editor` | 编辑模式 | `font_family`, `font_size`, `background_color`, `text_color`, `caret_color` |
+| `window` | 窗口外观 | `border_radius` |
+| `tab_bar` | 标签栏样式 | `background_color`, `text_color`, `active_text_color`, `active_indicator_color`, `font_family`, `font_size`, `radius_top`, `padding_h`, `padding_v` |
+| `tab_strip` | 分组抽屉配色 | `folder_pill_color`, `folder_pill_text_color`, `folder_bg_open`(子项底色), `folder_bg`(子项悬停色), `separator_color`(右缘分隔线), `folder_bar_color`, `plus_color`, `fade_width` |
+| `content` | 内容区显示 | `font_family`, `font_size`, `text_color`, `heading_color`, `heading_font_family`, `pane_border_*`, `enable_glass`, `glass_opacity`, `enable_glow`, `enable_frost`, `frost_intensity`, `frost_grain`, `link_color` |
+| `editor` | 编辑模式 | `font_family`, `font_size`, `background_color`, `text_color`, `caret_color`, `padding_h`, `padding_v` |
 | `scrollbar` | 滚动条 | `width`, `handle_color`, `handle_hover_color`, `track_color` |
 
 ### config.json 参考
@@ -121,6 +129,8 @@ pyinstaller main.py --onefile --noconsole --name Wallpaper_Notes --icon=note_app
 | `hotkey.modifiers` | 组合键（Ctrl, Alt, Shift, Win） |
 | `hotkey.key` | 触发按键 |
 | `behavior.autostart` | 开机自启（推荐通过设置对话框修改） |
+| `window.open_drawers` | 启动时展开的分组抽屉（自动记录，一般无需手动改） |
+| `behavior.notes_dir` | 便签目录名（默认 `notes`） |
 
 ---
 
@@ -180,14 +190,20 @@ Wallpaper_Notes/
 ├── notes_manager.py     # 便签文件监控（watchdog）
 ├── hotkey.py            # 全局快捷键（RegisterHotKey）
 ├── tray.py              # 系统托盘菜单
-├── ui_components.py     # QSS 生成、RoundedPane、ColorButton
-├── models.py            # 数据模型
+├── ui_components.py     # 标签行组件（NoteStrip / FolderDrawer / NoteChip）+ QSS 生成
+├── models.py            # 数据模型（NoteInfo / FolderNode）
 ├── theme.json           # 样式默认配置
 ├── config.json          # 功能默认配置
 ├── SKILL.md             # AI Agent 配套技能
-├── notes/               # 便签数据（.md 文件）
-│   └── 笔记.md
+├── notes/               # 便签数据（子文件夹 = 分组）
+│   ├── 便签.md
+│   └── 分组/
+│       └── 分组内便签.md
 ├── fonts/               # 自定义字体（UI 导入后自动放置）
+├── design-prototypes/   # 界面设计签收稿
+├── project-decisions/   # 设计决策记录
+├── 开发者指南/           # PRD / 架构设计 / 开发规范等
+├── screenshots/         # README 截图
 ├── requirements.txt
 └── .gitignore
 ```
