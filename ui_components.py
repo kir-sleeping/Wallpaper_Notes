@@ -382,20 +382,18 @@ def _qcolor(css: str) -> QColor:
 class NoteChip(QPushButton):
     """便签 chip——裸文字 + 底部指示条。
 
-    指示条：未选中是居中的短灰条，选中后缓动变长并转为指示色。
-    长度与颜色都在 paintEvent 里画（QSS 做不了动画），QSS 只管文字与背景；
+    指示条只在选中后出现：从中心向两侧缓动生长到满宽（未选中不画任何条）。
+    长度在 paintEvent 里画（QSS 做不了动画），QSS 只管文字与背景；
     底部仍留 2px 透明边框占位，条正好画在这段里，几何与改版前一致。
     """
 
     _BAR_H = 2                  # 指示条高度
-    _BAR_IDLE_RATIO = 0.34      # 未选中时长度占 chip 宽的比例
-    _BAR_ANIM_MS = 180          # 变长/收短动画时长
+    _BAR_ANIM_MS = 180          # 生长/收回动画时长
 
     def __init__(
         self,
         filepath: str,
         name: str,
-        idle_color: QColor,
         active_color: QColor,
         parent: QWidget | None = None,
     ) -> None:
@@ -407,18 +405,16 @@ class NoteChip(QPushButton):
         # 固定宽度：chip 永不压缩，超出标签行时被裁掉（溢出隔断，同 QTabBar 行为）
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
-        self._idle_color = QColor(idle_color)
         self._active_color = QColor(active_color)
-        self._progress = 0.0        # 0 = 短灰条，1 = 满宽指示色条
+        self._progress = 0.0        # 0 = 无条，1 = 满宽指示色条
         self._first_sync = True     # 首次同步状态直接到位，不做动画
         self._anim = QVariantAnimation(self)
         self._anim.setDuration(self._BAR_ANIM_MS)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim.valueChanged.connect(self._on_bar_anim)
 
-    def set_bar_colors(self, idle_color: QColor, active_color: QColor) -> None:
+    def set_bar_color(self, active_color: QColor) -> None:
         """主题换色后同步（不动进度）。"""
-        self._idle_color = QColor(idle_color)
         self._active_color = QColor(active_color)
         self.update()
 
@@ -439,19 +435,24 @@ class NoteChip(QPushButton):
 
     def _on_bar_anim(self, value) -> None:
         self._progress = float(value)
+        # 收缩方向：缩到 50% 宽就直接消失，不再缩到底
+        if self._anim.endValue() == 0.0 and self._progress <= 0.5:
+            self._anim.stop()
+            self._progress = 0.0
         self.update()
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         super().paintEvent(event)
+        if self._progress <= 0.01:
+            return                   # 未选中：不画任何条
         w, h = self.width(), self.height()
         if w <= 0 or h <= 0:
             return
-        idle_len = max(10.0, w * self._BAR_IDLE_RATIO)
-        length = idle_len + (w - idle_len) * self._progress
+        length = w * self._progress   # 从中心向两侧生长到满宽
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(_lerp_color(self._idle_color, self._active_color, self._progress))
+        painter.setBrush(self._active_color)
         radius = self._BAR_H / 2
         painter.drawRoundedRect(
             QRectF((w - length) / 2, h - self._BAR_H, length, self._BAR_H),
@@ -1048,31 +1049,24 @@ class NoteStrip(QWidget):
         self._apply_fonts()
         self._apply_bar_colors()
 
-    def _bar_colors(self) -> tuple[QColor, QColor, QColor, QColor, QColor]:
-        """指示条配色：(便签未选中, 便签选中, 文件夹条, 胶囊色, 胶囊悬停色)。
+    def _bar_colors(self) -> tuple[QColor, QColor, QColor, QColor]:
+        """指示条配色：(便签选中, 文件夹条, 胶囊色, 胶囊悬停色)。
 
-        便签选中＝主题的指示色；未选中＝文字色淡化成的灰条（可用
-        tab_strip.bar_idle_color 单独指定）；文件夹条与胶囊默认同指示色
+        便签选中＝主题的指示色；文件夹条与胶囊默认同指示色
         （分别可用 folder_bar_color / folder_pill_color 单独指定）。
         """
         tb = self._theme.get("tab_bar", {})
         ts = self._theme.get("tab_strip", {})
-        raw_idle = ts.get("bar_idle_color")
-        if raw_idle:
-            idle = _qcolor(raw_idle)
-        else:
-            idle = _qcolor(_s(tb, "text_color", "#666666"))
-            idle.setAlphaF(0.40)
         active = _qcolor(_s(tb, "active_indicator_color", "#4A90D9"))
         folder_bar = _qcolor(ts.get("folder_bar_color", _s(tb, "active_indicator_color", "#4A90D9")))
         pill = _qcolor(ts.get("folder_pill_color", _s(tb, "active_indicator_color", "#4A90D9")))
         pill_hover = _pill_hover_color(pill)
-        return idle, active, folder_bar, pill, pill_hover
+        return active, folder_bar, pill, pill_hover
 
     def _apply_bar_colors(self) -> None:
-        idle, active, folder_bar, pill, pill_hover = self._bar_colors()
+        active, folder_bar, pill, pill_hover = self._bar_colors()
         for chip in self._chips.values():
-            chip.set_bar_colors(idle, active)
+            chip.set_bar_color(active)
         for drawer in self._drawers.values():
             drawer.set_bar_color(folder_bar)
             drawer.set_pill_colors(pill, pill_hover)
@@ -1117,8 +1111,8 @@ class NoteStrip(QWidget):
 
     def _build_level(self, node: Any, lay: QHBoxLayout) -> None:
         for info in node.notes:
-            idle, active, _folder_bar, _pill, _pill_hover = self._bar_colors()
-            chip = NoteChip(info.filepath, info.filename, idle, active)
+            active, _folder_bar, _pill, _pill_hover = self._bar_colors()
+            chip = NoteChip(info.filepath, info.filename, active)
             chip.setFont(QFont(self._strip_font_family(), self._strip_font_size()))
             chip.clicked.connect(
                 lambda checked=False, fp=info.filepath: self._on_chip_clicked(fp)
@@ -1138,7 +1132,7 @@ class NoteStrip(QWidget):
 
     def _make_drawer(self, node: Any) -> FolderDrawer:
         drawer = FolderDrawer(node.rel_path, node.name, self)
-        _i, _a, _f, pill, pill_hover = self._bar_colors()
+        _a, _f, pill, pill_hover = self._bar_colors()
         drawer.set_pill_colors(pill, pill_hover)
         drawer.set_bar_color(_f)
         drawer.name_btn.clicked.connect(
@@ -1157,8 +1151,8 @@ class NoteStrip(QWidget):
         drawer.filter_wheel_with(self)          # 抽屉内部不留滚轮盲区
 
         for info in node.notes:
-            idle, active, _folder_bar, _pill, _pill_hover = self._bar_colors()
-            chip = NoteChip(info.filepath, info.filename, idle, active)
+            active, _folder_bar, _pill, _pill_hover = self._bar_colors()
+            chip = NoteChip(info.filepath, info.filename, active)
             chip.clicked.connect(
                 lambda checked=False, fp=info.filepath: self._on_chip_clicked(fp)
             )
